@@ -216,7 +216,7 @@ Send a GDTOT URL to get started!
             file_name = document.file_name
             
             # Check file size
-            if document.file_size > config.MAX_FILE_SIZE:
+            if document.file_size and document.file_size > config.MAX_FILE_SIZE:
                 await update.message.reply_text(
                     f"❌ File too large! Maximum size is {config.MAX_FILE_SIZE // (1024*1024)}MB"
                 )
@@ -329,15 +329,12 @@ Send a GDTOT URL to get started!
             soup = BeautifulSoup(response.content, 'html.parser')
             
             # Extract file information from the page
-            # This will need to be adapted based on the actual page structure
             filename = "Unknown"
             size = "Unknown"
             
             title_tag = soup.find('title')
             if title_tag:
                 filename = title_tag.text.replace(' - GDTOT', '').strip()
-            
-            # Add more parsing logic here based on GDTOT's page structure
             
             return {
                 'success': True,
@@ -374,22 +371,22 @@ def main():
     # Initialize GDTOT bot
     gdtot_bot = GDTOTBot()
 
-    # Add handlers
+    # Add handlers - USING CORRECT FILTERS
     application.add_handler(CommandHandler("start", gdtot_bot.start))
     application.add_handler(CommandHandler("help", gdtot_bot.help_command))
     application.add_handler(CommandHandler("upload", gdtot_bot.upload_command))
     application.add_handler(CommandHandler("download", gdtot_bot.handle_gdtot_url))
     application.add_handler(CommandHandler("fileinfo", gdtot_bot.file_info_command))
     
-    # Handle GDTOT URLs
+    # Handle GDTOT URLs - CORRECT FILTER
     application.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND, 
         gdtot_bot.handle_gdtot_url
     ))
     
-    # Handle file uploads
+    # Handle file uploads - CORRECT FILTER
     application.add_handler(MessageHandler(
-        filters.DOCUMENT, 
+        filters.ATTACHMENT,  # Changed from filters.DOCUMENT
         gdtot_bot.handle_document
     ))
     
