@@ -26,7 +26,7 @@ MAX_FILE_SIZE = 4 * 1024 * 1024 * 1024  # 4GB
 PRESIGNED_URL_EXPIRY = 7 * 24 * 60 * 60  # 7 days
 
 # Temporary file settings
-TEMP_DIR = tempfile.gettempdir()
+TEMP_DIR = ./downloads
 
 # YouTube download settings
 YTDL_OPTIONS = {
