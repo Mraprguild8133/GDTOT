@@ -1,48 +1,36 @@
+# config.py
 import os
-from typing import Optional
-from pydantic import BaseSettings, validator
+import logging
 
+# Set up basic logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-class Settings(BaseSettings):
-    """Configuration management using Pydantic"""
-    
-    # Telegram API Configuration
-    API_ID: int
-    API_HASH: str
-    BOT_TOKEN: str
-    
-    # Wasabi Configuration
-    WASABI_ACCESS_KEY: str
-    WASABI_SECRET_KEY: str
-    WASABI_BUCKET: str
-    WASABI_REGION: str = "us-east-1"
-    
-    # Bot Behavior Configuration
-    MAX_FILE_SIZE: int = 4 * 1024 * 1024 * 1024  # 4GB
-    DOWNLOAD_LINK_EXPIRY: int = 86400  # 24 hours
-    PROGRESS_UPDATE_INTERVAL: int = 2  # seconds
-    
-    # Upload Optimization
-    MULTIPART_THRESHOLD: int = 25 * 1024 * 1024  # 25MB
-    MULTIPART_CHUNKSIZE: int = 5 * 1024 * 1024   # 5MB
-    MAX_CONCURRENCY: int = 10
-    
-    @validator('API_ID', pre=True)
-    def validate_api_id(cls, v):
-        if v == 12345 or not v:
-            raise ValueError('API_ID must be set')
-        return int(v)
-    
-    @validator('BOT_TOKEN')
-    def validate_bot_token(cls, v):
-        if not v or "YOUR_BOT_TOKEN" in v:
-            raise ValueError('BOT_TOKEN must be set')
-        return v
-    
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
+# Required environment variables
+try:
+    API_ID = os.environ["API_ID"]
+    API_HASH = os.environ["API_HASH"]
+    BOT_TOKEN = os.environ["BOT_TOKEN"]
+    WASABI_ACCESS_KEY = os.environ["WASABI_ACCESS_KEY"]
+    WASABI_SECRET_KEY = os.environ["WASABI_SECRET_KEY"]
+    WASABI_BUCKET = os.environ["WASABI_BUCKET"]
+    WASABI_REGION = os.environ["WASABI_REGION"]
+except KeyError as e:
+    logging.error(f"Missing required environment variable: {e}")
+    raise SystemExit(1)
 
+# Derived configuration
+WASABI_ENDPOINT = f"https://s3.{WASABI_REGION}.wasabisys.com"
 
-# Global config instance
-config = Settings()
+# Upload settings
+MAX_FILE_SIZE = 4 * 1024 * 1024 * 1024  # 4GB
+PRESIGNED_URL_EXPIRY = 7 * 24 * 60 * 60  # 7 days
+
+# Temporary file settings
+TEMP_DIR = tempfile.gettempdir()
+
+# YouTube download settings
+YTDL_OPTIONS = {
+    'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+    'merge_output_format': 'mp4',
+    'noplaylist': True,
+}
