@@ -519,7 +519,7 @@
 <body>
     <div class="container">
         <header>
-            <h1>Enhanced Media Player</h1>
+            <h1>{{ media_type|title }}</h1>
             <p class="subtitle">Supports video, audio, and file downloads</p>
         </header>
 
@@ -527,7 +527,7 @@
             <!-- Video Player -->
             <div class="media-display" id="videoPlayer">
                 <video id="mediaElement" controls autoplay>
-                    <source src="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4" type="video/mp4">
+                    <source src="{{ media_url }}" type="video/mp4">
                     Your browser does not support the video tag.
                 </video>
             </div>
@@ -539,7 +539,7 @@
                     <p>Audio is playing in the background</p>
                 </div>
                 <audio id="audioElement" controls autoplay style="display: none;">
-                    <source src="hujttp" type="audio/mpeg">
+                    <source src="{{ media_url }}" type="audio/mpeg">
                     Your browser does not support the audio tag.
                 </audio>
                 <div class="audio-visualizer" id="audioVisualizer">
@@ -603,7 +603,7 @@
 
             <div class="media-info">
                 <div class="file-info">
-                    <h3 id="fileName">Sample Video.mp4</h3>
+                    <h3 id="fileName">{{ media_type|title }}</h3>
                     <p id="fileDetails">MP4 • 1080p • 2:30</p>
                 </div>
                 <a href="{{ media_url }}" class="download-btn" download>
@@ -710,14 +710,14 @@
                 if (type === 'video') {
                     videoPlayer.style.display = 'flex';
                     activeMedia = mediaElement;
-                    fileNameEl.textContent = 'Sample Video.mp4';
+                    fileNameEl.textContent = '{{ media_type|title }}';
                     fileDetailsEl.textContent = 'MP4 • 1080p • 2:30';
                     downloadBtn.href = '{{ media_url }}';
                     audioVisualizer.style.display = 'none';
                 } else if (type === 'audio') {
                     audioPlayer.style.display = 'flex';
                     activeMedia = audioElement;
-                    fileNameEl.textContent = 'Sample Audio.mp3';
+                    fileNameEl.textContent = '{{ media_type|title }}';
                     fileDetailsEl.textContent = 'MP3 • 320kbps • 3:45';
                     downloadBtn.href = '{{ media_url }}';
                     audioVisualizer.style.display = 'flex';
