@@ -12,18 +12,36 @@ from pyrogram.errors import MessageNotModified
 import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
+from boto3.s3.transfer import TransferConfig  # Correct import
 
-# Import configuration
-from config import config
-
-# Configure logging
+# --- 1. CONFIGURATION AND ENVIRONMENT SETUP ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# Load environment variables
+API_ID = os.environ.get("API_ID")
+API_HASH = os.environ.get("API_HASH")
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+
+WASABI_ACCESS_KEY = os.environ.get("WASABI_ACCESS_KEY")
+WASABI_SECRET_KEY = os.environ.get("WASABI_SECRET_KEY")
+WASABI_BUCKET = os.environ.get("WASABI_BUCKET")
+WASABI_REGION = os.environ.get("WASABI_REGION")
+
+# Check for required variables
+if not all([API_ID, API_HASH, BOT_TOKEN, WASABI_ACCESS_KEY, WASABI_SECRET_KEY, WASABI_BUCKET, WASABI_REGION]):
+    logger.error("One or more required environment variables are missing. Please set all variables.")
+    exit(1)
+
+# Wasabi Endpoint Construction
+WASABI_ENDPOINT = f"https://s3.{WASABI_REGION}.wasabisys.com"
+
 # Constants
 MB = 1024 ** 2
+MAX_FILE_SIZE = 4 * 1024 ** 3  # 4GB
+URL_EXPIRY = 604800  # 7 days
 
-# --- WASABI (BOTO3) INITIALIZATION ---
+# --- 2. WASABI (BOTO3) INITIALIZATION ---
 try:
     s3_config = Config(
         signature_version='s3v4',
@@ -32,36 +50,37 @@ try:
         retries={'max_attempts': 10, 'mode': 'standard'}
     )
     
-    transfer_config = boto3.s3.transfer.TransferConfig(
-        multipart_threshold=config.MULTIPART_THRESHOLD,
+    # CORRECT TransferConfig usage
+    transfer_config = TransferConfig(
+        multipart_threshold=100 * MB,  # Start multipart upload for files > 100MB
         max_concurrency=20,
-        multipart_chunksize=config.MULTIPART_CHUNKSIZE,
+        multipart_chunksize=25 * MB,
         use_threads=True
     )
 
     s3_client = boto3.client(
         's3',
-        endpoint_url=config.WASABI_ENDPOINT,
-        aws_access_key_id=config.WASABI_ACCESS_KEY,
-        aws_secret_access_key=config.WASABI_SECRET_KEY,
-        region_name=config.WASABI_REGION,
+        endpoint_url=WASABI_ENDPOINT,
+        aws_access_key_id=WASABI_ACCESS_KEY,
+        aws_secret_access_key=WASABI_SECRET_KEY,
+        region_name=WASABI_REGION,
         config=s3_config
     )
-    logger.info(f"Wasabi S3 Client Initialized for region: {config.WASABI_REGION}")
+    logger.info(f"Wasabi S3 Client Initialized for region: {WASABI_REGION}")
 except Exception as e:
     logger.error(f"Error initializing Boto3 client: {e}")
     exit(1)
 
-# --- PYROGRAM BOT INITIALIZATION ---
+# --- 3. PYROGRAM BOT INITIALIZATION ---
 app = Client(
     "wasabi_file_bot",
-    api_id=config.API_ID,
-    api_hash=config.API_HASH,
-    bot_token=config.BOT_TOKEN
+    api_id=int(API_ID),
+    api_hash=API_HASH,
+    bot_token=BOT_TOKEN
 )
 logger.info("Pyrogram Client Initialized.")
 
-# --- PROGRESS TRACKING & UTILITIES ---
+# --- 4. PROGRESS TRACKING & UTILITIES ---
 class ProgressTracker:
     """Tracks upload progress for Boto3 and updates the Telegram message."""
     def __init__(self, client: Client, message: Message, total: int):
@@ -133,7 +152,7 @@ async def pyrogram_progress_callback(current, total, client, message):
     except Exception as e:
         logger.warning(f"Failed to edit download progress message: {e}")
 
-# --- BOT HANDLERS ---
+# --- 5. BOT HANDLERS ---
 @app.on_message(filters.command("start") & filters.private)
 async def start_command(client: Client, message: Message):
     """Handles the /start command."""
@@ -154,10 +173,9 @@ async def handle_file_upload(client: Client, message: Message):
     
     file_info = message.document or message.video or message.audio
     
-    if file_info.file_size > config.MAX_FILE_SIZE:
+    if file_info.file_size > MAX_FILE_SIZE:
         return await message.reply_text("File size exceeds the 4GB bot capacity limit.")
     
-    # Generate unique key to prevent collisions
     file_name = file_info.file_name or f"file-{uuid.uuid4().hex}"
     file_size = file_info.file_size
     temp_file_path = os.path.join(os.getcwd(), str(uuid.uuid4()))
@@ -202,7 +220,7 @@ async def handle_file_upload(client: Client, message: Message):
             None,
             s3_client.upload_file,
             download_path,
-            config.WASABI_BUCKET,
+            WASABI_BUCKET,
             wasabi_key,
             Callback=tracker.update,
             Config=transfer_config
@@ -222,11 +240,11 @@ async def handle_file_upload(client: Client, message: Message):
     try:
         url = s3_client.generate_presigned_url(
             'get_object',
-            Params={'Bucket': config.WASABI_BUCKET, 'Key': wasabi_key},
-            ExpiresIn=config.URL_EXPIRY
+            Params={'Bucket': WASABI_BUCKET, 'Key': wasabi_key},
+            ExpiresIn=URL_EXPIRY
         )
         
-        expiry_date = datetime.now() + timedelta(seconds=config.URL_EXPIRY)
+        expiry_date = datetime.now() + timedelta(seconds=URL_EXPIRY)
         
         final_message = (
             f"**⚡️ IMMORTAL SPEED TRANSFER SUCCESSFUL!**\n\n"
@@ -250,7 +268,7 @@ async def handle_file_upload(client: Client, message: Message):
             os.remove(download_path)
             logger.info(f"Cleaned up local file: {download_path}")
 
-# --- MAIN EXECUTION ---
+# --- 6. MAIN EXECUTION ---
 if __name__ == "__main__":
     logger.info("Starting bot...")
     app.run()
