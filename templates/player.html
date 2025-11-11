@@ -1,62 +1,474 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Media Player - {{ media_type|title }}</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mobile Media Player</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        body {
-            font-family: Arial, sans-serif;
+        * {
             margin: 0;
-            padding: 20px;
-            background: #1a1a1a;
-            color: white;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        :root {
+            --primary-color: #4CAF50;
+            --primary-dark: #45a049;
+            --background-dark: #1a1a1a;
+            --card-dark: #2d2d2d;
+            --card-light: #383838;
+            --text-light: #ffffff;
+            --text-muted: #b0b0b0;
+            --border-radius: 12px;
+            --shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: var(--background-dark);
+            color: var(--text-light);
+            line-height: 1.5;
+            padding: 16px;
+            min-height: 100vh;
             display: flex;
             flex-direction: column;
-            align-items: center;
-            min-height: 100vh;
         }
+        
         .player-container {
-            max-width: 800px;
+            background: var(--card-dark);
+            border-radius: var(--border-radius);
+            box-shadow: var(--shadow);
+            overflow: hidden;
             width: 100%;
-            background: #2d2d2d;
-            padding: 20px;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            max-width: 500px;
+            margin: 0 auto;
         }
+        
+        .player-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .player-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+        
+        .file-info {
+            padding: 16px 20px;
+            background: var(--card-light);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+        
+        .info-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+        
+        .info-item {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .info-label {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+        }
+        
+        .info-value {
+            font-size: 0.95rem;
+            font-weight: 500;
+        }
+        
+        .quality-badge {
+            display: inline-block;
+            background: var(--primary-color);
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        
+        .media-container {
+            position: relative;
+            width: 100%;
+            background: #000;
+        }
+        
         video, audio {
             width: 100%;
-            border-radius: 5px;
+            display: block;
+            outline: none;
         }
-        .download-btn {
-            display: inline-block;
-            background: #4CAF50;
+        
+        video {
+            aspect-ratio: 16/9;
+        }
+        
+        .custom-audio-player {
+            padding: 20px;
+            background: #000;
+        }
+        
+        .audio-visualizer {
+            height: 60px;
+            background: #111;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: flex-end;
+            padding: 10px;
+            gap: 3px;
+        }
+        
+        .audio-bar {
+            flex: 1;
+            background: var(--primary-color);
+            border-radius: 2px;
+            min-height: 4px;
+            transition: height 0.2s ease;
+        }
+        
+        .audio-controls {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        
+        .play-pause-btn {
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            background: var(--primary-color);
+            border: none;
             color: white;
-            padding: 10px 20px;
-            text-decoration: none;
-            border-radius: 5px;
-            margin-top: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 1.2rem;
+        }
+        
+        .progress-container {
+            flex: 1;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 2px;
+            position: relative;
+            cursor: pointer;
+        }
+        
+        .progress-bar {
+            height: 100%;
+            background: var(--primary-color);
+            border-radius: 2px;
+            width: 0%;
+        }
+        
+        .time-display {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            min-width: 100px;
+            text-align: center;
+        }
+        
+        .player-actions {
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        
+        .action-btn {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 14px 16px;
+            background: rgba(255, 255, 255, 0.08);
+            border: none;
+            border-radius: 10px;
+            color: var(--text-light);
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        .action-btn:hover, .action-btn:active {
+            background: rgba(255, 255, 255, 0.15);
+        }
+        
+        .action-btn i {
+            font-size: 1.2rem;
+            width: 24px;
+            text-align: center;
+        }
+        
+        .download-btn {
+            background: var(--primary-color);
+            font-weight: 600;
+        }
+        
+        .download-btn:hover, .download-btn:active {
+            background: var(--primary-dark);
+        }
+        
+        .volume-control {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 0;
+        }
+        
+        .volume-slider {
+            flex: 1;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 2px;
+            outline: none;
+            -webkit-appearance: none;
+        }
+        
+        .volume-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: var(--primary-color);
+            cursor: pointer;
+        }
+        
+        .error-message {
+            padding: 40px 20px;
+            text-align: center;
+            color: var(--text-muted);
+        }
+        
+        /* Mobile-specific optimizations */
+        @media (max-width: 480px) {
+            body {
+                padding: 12px;
+            }
+            
+            .player-header {
+                padding: 14px 16px;
+            }
+            
+            .player-title {
+                font-size: 1.1rem;
+            }
+            
+            .action-btn {
+                padding: 12px 14px;
+                font-size: 0.95rem;
+            }
+            
+            .info-grid {
+                grid-template-columns: 1fr;
+                gap: 10px;
+            }
+        }
+        
+        /* Touch-friendly controls */
+        button, .action-btn {
+            -webkit-tap-highlight-color: transparent;
+            user-select: none;
+        }
+        
+        /* Hide native audio controls on mobile for custom ones */
+        audio {
+            height: 0;
+            opacity: 0;
+            position: absolute;
         }
     </style>
 </head>
 <body>
     <div class="player-container">
-        <h2>{{ media_type|title }} Player</h2>
+        <div class="player-header">
+            <div class="player-title">Media Player</div>
+            <div class="time-display">0:00 / 3:37</div>
+        </div>
         
-        {% if media_type == 'video' %}
-        <video controls autoplay>
-            <source src="{{ media_url }}" type="video/mp4">
-            Your browser does not support the video tag.
-        </video>
-        {% elif media_type == 'audio' %}
-        <audio controls autoplay>
-            <source src="{{ media_url }}" type="audio/mpeg">
-            Your browser does not support the audio tag.
-        </audio>
-        {% else %}
-        <p>This file type cannot be played in the browser.</p>
-        {% endif %}
+        <div class="file-info">
+            <div class="info-grid">
+                <div class="info-item">
+                    <span class="info-label">File Name</span>
+                    <span class="info-value">summer_vacation.mp4</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">File Size</span>
+                    <span class="info-value">156.8 MB</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Duration</span>
+                    <span class="info-value">3:37</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Quality</span>
+                    <span class="info-value">
+                        <span class="quality-badge">1080p HD</span>
+                    </span>
+                </div>
+            </div>
+        </div>
         
-        <br>
-        <a href="{{ media_url }}" class="download-btn" download>📥 Download File</a>
+        <div class="media-container">
+            <video controls>
+                <source src="#" type="video/mp4">
+                Your browser does not support the video tag.
+            </video>
+            
+            <!-- Custom audio player (hidden by default) -->
+            <div class="custom-audio-player" style="display: none;">
+                <div class="audio-visualizer">
+                    <div class="audio-bar" style="height: 20%"></div>
+                    <div class="audio-bar" style="height: 40%"></div>
+                    <div class="audio-bar" style="height: 60%"></div>
+                    <div class="audio-bar" style="height: 80%"></div>
+                    <div class="audio-bar" style="height: 100%"></div>
+                    <div class="audio-bar" style="height: 80%"></div>
+                    <div class="audio-bar" style="height: 60%"></div>
+                    <div class="audio-bar" style="height: 40%"></div>
+                    <div class="audio-bar" style="height: 20%"></div>
+                </div>
+                <div class="audio-controls">
+                    <button class="play-pause-btn">▶</button>
+                    <div class="progress-container">
+                        <div class="progress-bar"></div>
+                    </div>
+                </div>
+                <div class="volume-control">
+                    <span>🔊</span>
+                    <input type="range" class="volume-slider" min="0" max="100" value="80">
+                </div>
+            </div>
+            
+            <audio>
+                <source src="#" type="audio/mpeg">
+                Your browser does not support the audio tag.
+            </audio>
+        </div>
+        
+        <div class="player-actions">
+            <button class="action-btn download-btn">
+                <i class="fas fa-download"></i> Download File
+            </button>
+            <button class="action-btn">
+                <i class="fas fa-random"></i> Shuffle Playlist
+            </button>
+            <button class="action-btn">
+                <i class="fas fa-heart"></i> Add to Favorites
+            </button>
+            <button class="action-btn">
+                <i class="fas fa-redo"></i> Repeat Track
+            </button>
+        </div>
     </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // For demo purposes, we'll simulate a video player
+            // In a real implementation, you would connect these to actual media elements
+            
+            const playPauseBtn = document.querySelector('.play-pause-btn');
+            const progressBar = document.querySelector('.progress-bar');
+            const progressContainer = document.querySelector('.progress-container');
+            const timeDisplay = document.querySelector('.time-display');
+            
+            let isPlaying = false;
+            let currentTime = 0;
+            let duration = 217; // 3:37 in seconds
+            
+            // Format time as MM:SS
+            function formatTime(seconds) {
+                const mins = Math.floor(seconds / 60);
+                const secs = Math.floor(seconds % 60);
+                return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+            }
+            
+            // Update time display
+            function updateTimeDisplay() {
+                timeDisplay.textContent = `${formatTime(currentTime)} / ${formatTime(duration)}`;
+            }
+            
+            // Update progress bar
+            function updateProgress() {
+                const progressPercent = (currentTime / duration) * 100;
+                progressBar.style.width = `${progressPercent}%`;
+            }
+            
+            // Play/pause toggle
+            playPauseBtn.addEventListener('click', function() {
+                isPlaying = !isPlaying;
+                playPauseBtn.innerHTML = isPlaying ? '<i class="fas fa-pause"></i>' : '<i class="fas fa-play"></i>';
+                
+                if (isPlaying) {
+                    // Simulate playback
+                    const interval = setInterval(() => {
+                        if (isPlaying && currentTime < duration) {
+                            currentTime += 1;
+                            updateTimeDisplay();
+                            updateProgress();
+                        } else {
+                            clearInterval(interval);
+                            isPlaying = false;
+                            playPauseBtn.innerHTML = '<i class="fas fa-play"></i>';
+                        }
+                    }, 1000);
+                }
+            });
+            
+            // Seek functionality
+            progressContainer.addEventListener('click', function(e) {
+                const rect = progressContainer.getBoundingClientRect();
+                const percent = (e.clientX - rect.left) / rect.width;
+                currentTime = duration * percent;
+                updateTimeDisplay();
+                updateProgress();
+            });
+            
+            // Initialize display
+            updateTimeDisplay();
+            
+            // Visualizer animation for audio
+            const audioBars = document.querySelectorAll('.audio-bar');
+            function animateVisualizer() {
+                audioBars.forEach(bar => {
+                    const randomHeight = Math.floor(Math.random() * 100) + 5;
+                    bar.style.height = `${randomHeight}%`;
+                });
+                
+                if (isPlaying) {
+                    requestAnimationFrame(animateVisualizer);
+                }
+            }
+            
+            // Simulate audio visualizer when playing
+            playPauseBtn.addEventListener('click', function() {
+                if (isPlaying) {
+                    animateVisualizer();
+                }
+            });
+            
+            // Download button functionality
+            document.querySelector('.download-btn').addEventListener('click', function() {
+                alert('Download would start in a real implementation');
+            });
+            
+            // Volume control
+            const volumeSlider = document.querySelector('.volume-slider');
+            volumeSlider.addEventListener('input', function() {
+                // In a real implementation, this would control the media volume
+                console.log('Volume set to: ' + volumeSlider.value + '%');
+            });
+        });
+    </script>
 </body>
-</html>
+    </html>
