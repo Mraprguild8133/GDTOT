@@ -2,23 +2,31 @@ from telethon import TelegramClient, events
 from telethon.tl.types import Document, DocumentAttributeFilename
 import asyncio
 import os
+import io
 from config import config
 from wasabi_client import WasabiClient
 from utils import utils
 
 class TelegramWasabiBot:
     def __init__(self):
+        self.client = None
+        self.wasabi = WasabiClient()
+        self.upload_tasks = set()
+        self.download_tasks = set()
+    
+    async def initialize(self):
+        """Initialize the Telegram client properly"""
         self.client = TelegramClient(
             'wasabi_bot_session',
             config.API_ID,
             config.API_HASH
-        ).start(bot_token=config.BOT_TOKEN)
+        )
         
-        self.wasabi = WasabiClient()
-        self.upload_tasks = set()
-        self.download_tasks = set()
+        # Start the client before setting up handlers
+        await self.client.start(bot_token=config.BOT_TOKEN)
         
         self.setup_handlers()
+        return self
     
     def setup_handlers(self):
         """Setup Telegram event handlers"""
