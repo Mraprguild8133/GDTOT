@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Enhanced Media Player</title>
+    <title>{{ media_type|title }} Player</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         * {
@@ -20,13 +20,11 @@
             min-height: 100vh;
             display: flex;
             flex-direction: column;
-            padding: 0;
             overflow-x: hidden;
         }
 
         .container {
             width: 100%;
-            max-width: 100%;
             display: flex;
             flex-direction: column;
             flex: 1;
@@ -77,7 +75,6 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
         }
 
         video, audio {
@@ -85,43 +82,6 @@
             height: 100%;
             outline: none;
             border-radius: 12px;
-        }
-
-        .audio-placeholder {
-            width: 100%;
-            height: 200px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            background: linear-gradient(135deg, #2d2d42, #3d3d5c);
-            border-radius: 12px;
-            color: #b0b0b0;
-        }
-
-        .audio-placeholder i {
-            font-size: 3rem;
-            margin-bottom: 1rem;
-            color: #4cc9f0;
-        }
-
-        .audio-visualizer {
-            width: 100%;
-            height: 150px;
-            display: none;
-            align-items: flex-end;
-            justify-content: center;
-            gap: 2px;
-            padding: 15px;
-        }
-
-        .bar {
-            width: 6px;
-            background: linear-gradient(to top, #4cc9f0, #4361ee);
-            border-radius: 3px 3px 0 0;
-            transition: height 0.2s ease;
-            flex: 1;
-            max-width: 8px;
         }
 
         .controls {
@@ -140,7 +100,6 @@
             border-radius: 3px;
             cursor: pointer;
             position: relative;
-            touch-action: none;
         }
 
         .progress-bar {
@@ -152,30 +111,11 @@
             position: relative;
         }
 
-        .progress-handle {
-            position: absolute;
-            right: -6px;
-            top: 50%;
-            transform: translateY(-50%);
-            width: 12px;
-            height: 12px;
-            background: #fff;
-            border-radius: 50%;
-            box-shadow: 0 0 5px rgba(0, 0, 0, 0.5);
-            display: none;
-        }
-
-        .progress-container:hover .progress-handle,
-        .progress-container:active .progress-handle {
-            display: block;
-        }
-
         .time-display {
             display: flex;
             justify-content: space-between;
             font-size: 0.8rem;
             color: #b0b0b0;
-            margin-top: 2px;
         }
 
         .control-buttons {
@@ -194,10 +134,6 @@
             transition: all 0.2s ease;
             padding: 0.5rem;
             border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            touch-action: manipulation;
         }
 
         .btn:active {
@@ -213,11 +149,6 @@
             box-shadow: 0 4px 10px rgba(76, 201, 240, 0.3);
         }
 
-        .btn-play-pause:active {
-            transform: scale(0.92);
-            box-shadow: 0 2px 5px rgba(76, 201, 240, 0.5);
-        }
-
         .volume-container {
             display: flex;
             align-items: center;
@@ -230,7 +161,6 @@
             background: rgba(255, 255, 255, 0.15);
             border-radius: 2px;
             cursor: pointer;
-            touch-action: none;
         }
 
         .volume-level {
@@ -252,10 +182,6 @@
         .file-info h3 {
             font-size: 1.1rem;
             margin-bottom: 0.25rem;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            max-width: 200px;
         }
 
         .file-info p {
@@ -270,100 +196,12 @@
             padding: 0.7rem 1.2rem;
             border-radius: 50px;
             font-weight: 600;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            transition: all 0.2s ease;
             text-decoration: none;
-            font-size: 0.9rem;
-            touch-action: manipulation;
-        }
-
-        .download-btn:active {
-            transform: translateY(2px);
-            box-shadow: 0 2px 5px rgba(76, 201, 240, 0.4);
-        }
-
-        .playback-rate {
             display: flex;
             align-items: center;
             gap: 6px;
-            background: rgba(255, 255, 255, 0.05);
-            padding: 0.4rem 0.8rem;
-            border-radius: 50px;
-            font-size: 0.8rem;
-        }
-
-        .playback-rate select {
-            background: transparent;
-            border: none;
-            color: white;
-            outline: none;
-            font-size: 0.8rem;
-            touch-action: manipulation;
-        }
-
-        .playback-rate select option {
-            background: #2d2d42;
-        }
-
-        .media-selector {
-            display: flex;
-            gap: 0.75rem;
-            margin-top: 1rem;
-        }
-
-        .media-option {
-            flex: 1;
-            padding: 1rem 0.75rem;
-            background: rgba(30, 30, 46, 0.6);
-            border-radius: 12px;
-            text-align: center;
-            cursor: pointer;
             transition: all 0.2s ease;
-            border: 2px solid transparent;
-            touch-action: manipulation;
-        }
-
-        .media-option:active {
-            transform: scale(0.98);
-        }
-
-        .media-option.active {
-            border-color: #4cc9f0;
-            background: rgba(30, 30, 46, 0.9);
-        }
-
-        .media-option i {
-            font-size: 1.5rem;
-            margin-bottom: 0.5rem;
-            color: #4cc9f0;
-        }
-
-        .media-option h3 {
-            font-size: 1rem;
-            margin-bottom: 0.25rem;
-        }
-
-        .media-option p {
-            color: #b0b0b0;
-            font-size: 0.75rem;
-        }
-
-        .unsupported-message {
-            text-align: center;
-            padding: 2rem;
-            background: rgba(255, 0, 0, 0.1);
-            border-radius: 12px;
-            border: 1px solid rgba(255, 0, 0, 0.3);
-            margin: 1rem 0;
-        }
-
-        .unsupported-message i {
-            font-size: 2rem;
-            margin-bottom: 1rem;
-            color: #ff6b6b;
+            font-size: 0.9rem;
         }
 
         footer {
@@ -374,191 +212,43 @@
             font-size: 0.75rem;
         }
 
-        /* Mobile-specific optimizations */
         @media (max-width: 480px) {
-            .container {
-                padding: 0.75rem;
-            }
-            
-            header {
-                padding: 1rem 0.75rem 0.75rem;
-            }
-            
-            h1 {
-                font-size: 1.3rem;
-            }
-            
-            .subtitle {
-                font-size: 0.8rem;
-            }
-            
-            .player-container {
-                padding: 1rem;
-            }
-            
-            .media-display {
-                border-radius: 10px;
-                margin-bottom: 1rem;
-            }
-            
-            .audio-placeholder {
-                height: 150px;
-            }
-            
-            .audio-visualizer {
-                height: 120px;
-                padding: 10px;
-            }
-            
-            .bar {
-                width: 5px;
-                max-width: 6px;
-            }
-            
-            .controls {
-                gap: 0.5rem;
-                padding: 0.75rem;
-                border-radius: 14px;
-            }
-            
-            .control-buttons {
-                padding: 0;
-            }
-            
-            .btn {
-                font-size: 1rem;
-                padding: 0.4rem;
-            }
-            
-            .btn-play-pause {
-                width: 46px;
-                height: 46px;
-                font-size: 1.2rem;
-            }
-            
-            .volume-slider {
-                width: 60px;
-            }
-            
-            .media-info {
-                flex-direction: column;
-                gap: 0.75rem;
-                align-items: flex-start;
-                padding: 0.75rem 0.5rem;
-            }
-            
-            .file-info h3 {
-                max-width: 100%;
-            }
-            
-            .download-btn {
-                width: 100%;
-                justify-content: center;
-            }
-            
-            .media-selector {
-                flex-direction: column;
-                gap: 0.5rem;
-            }
-        }
-
-        @media (max-width: 360px) {
-            .media-option {
-                padding: 0.75rem 0.5rem;
-            }
-            
-            .media-option i {
-                font-size: 1.3rem;
-            }
-            
-            .media-option h3 {
-                font-size: 0.9rem;
-            }
-            
-            .media-option p {
-                font-size: 0.7rem;
-            }
-            
-            .playback-rate {
-                padding: 0.3rem 0.6rem;
-                font-size: 0.75rem;
-            }
-        }
-
-        /* Orientation-specific adjustments */
-        @media (max-height: 500px) and (orientation: landscape) {
-            .player-container {
-                display: flex;
-                gap: 1rem;
-            }
-            
-            .media-display {
-                flex: 1;
-                max-width: 60%;
-            }
-            
-            .controls {
-                flex: 1;
-                justify-content: center;
-            }
-            
-            .media-info {
-                margin-top: 0.5rem;
-                padding-top: 0.5rem;
-            }
-        }
-
-        /* Prevent zoom on input focus for iOS */
-        @media screen and (max-width: 768px) {
-            select, button {
-                font-size: 16px;
-            }
+            .player-container { padding: 1rem; }
+            .btn-play-pause { width: 46px; height: 46px; }
         }
     </style>
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>{{ media_type|title }}</h1>
-            <p class="subtitle">Supports video, audio, and file downloads</p>
+            <h1>{{ media_type|title }} Player</h1>
+            <p class="subtitle">Supports video, audio, and downloads</p>
         </header>
 
         <div class="player-container">
-            <!-- Video Player -->
-            <div class="media-display" id="videoPlayer">
-                <video id="mediaElement" controls autoplay>
+            <div class="media-display">
+                {% if media_type == 'video' %}
+                <video id="mediaElement" controls>
                     <source src="{{ media_url }}" type="video/mp4">
                     Your browser does not support the video tag.
                 </video>
-            </div>
-
-            <!-- Audio Player (Hidden by default) -->
-            <div class="media-display" id="audioPlayer" style="display: none;">
-                <div class="audio-placeholder">
-                    <i class="fas fa-music"></i>
-                    <p>Audio is playing in the background</p>
-                </div>
-                <audio id="audioElement" controls autoplay style="display: none;">
+                {% elif media_type == 'audio' %}
+                <audio id="mediaElement" controls>
                     <source src="{{ media_url }}" type="audio/mpeg">
                     Your browser does not support the audio tag.
                 </audio>
-                <div class="audio-visualizer" id="audioVisualizer">
-                    <!-- Bars will be generated by JavaScript -->
+                {% else %}
+                <div class="unsupported-message">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    <h3>Unsupported File Type</h3>
+                    <p>This file type cannot be played in the browser.</p>
                 </div>
-            </div>
-
-            <!-- Unsupported File Type Message (Hidden by default) -->
-            <div class="unsupported-message" id="unsupportedMessage" style="display: none;">
-                <i class="fas fa-exclamation-triangle"></i>
-                <h3>Unsupported File Type</h3>
-                <p>This file type cannot be played in the browser.</p>
+                {% endif %}
             </div>
 
             <div class="controls">
                 <div class="progress-container" id="progressContainer">
-                    <div class="progress-bar" id="progressBar">
-                        <div class="progress-handle"></div>
-                    </div>
+                    <div class="progress-bar" id="progressBar"></div>
                 </div>
                 <div class="time-display">
                     <span id="currentTime">0:00</span>
@@ -566,45 +256,22 @@
                 </div>
 
                 <div class="control-buttons">
-                    <button class="btn" id="skipBackward">
-                        <i class="fas fa-backward"></i>
-                    </button>
-                    
-                    <button class="btn btn-play-pause" id="playPause">
-                        <i class="fas fa-play"></i>
-                    </button>
-                    
-                    <button class="btn" id="skipForward">
-                        <i class="fas fa-forward"></i>
-                    </button>
-                    
+                    <button class="btn" id="skipBackward"><i class="fas fa-backward"></i></button>
+                    <button class="btn btn-play-pause" id="playPause"><i class="fas fa-play"></i></button>
+                    <button class="btn" id="skipForward"><i class="fas fa-forward"></i></button>
                     <div class="volume-container">
-                        <button class="btn" id="muteToggle">
-                            <i class="fas fa-volume-up"></i>
-                        </button>
+                        <button class="btn" id="muteToggle"><i class="fas fa-volume-up"></i></button>
                         <div class="volume-slider" id="volumeSlider">
                             <div class="volume-level" id="volumeLevel"></div>
                         </div>
-                    </div>
-                    
-                    <div class="playback-rate">
-                        <span>Speed</span>
-                        <select id="playbackRate">
-                            <option value="0.5">0.5x</option>
-                            <option value="0.75">0.75x</option>
-                            <option value="1" selected>1x</option>
-                            <option value="1.25">1.25x</option>
-                            <option value="1.5">1.5x</option>
-                            <option value="2">2x</option>
-                        </select>
                     </div>
                 </div>
             </div>
 
             <div class="media-info">
                 <div class="file-info">
-                    <h3 id="fileName">{{ media_type|title }}</h3>
-                    <p id="fileDetails">MP4 • 1080p • 2:30</p>
+                    <h3>{{ media_type|title }}</h3>
+                    <p>{{ media_url }}</p>
                 </div>
                 <a href="{{ media_url }}" class="download-btn" download>
                     <i class="fas fa-download"></i> Download File
@@ -612,298 +279,42 @@
             </div>
         </div>
 
-        <div class="media-selector">
-            <div class="media-option active" data-type="video">
-                <i class="fas fa-film"></i>
-                <h3>Video Player</h3>
-                <p>MP4, WebM, OGV</p>
-            </div>
-            <div class="media-option" data-type="audio">
-                <i class="fas fa-music"></i>
-                <h3>Audio Player</h3>
-                <p>MP3, WAV, OGG</p>
-            </div>
-            <div class="media-option" data-type="unsupported">
-                <i class="fas fa-file"></i>
-                <h3>Other Files</h3>
-                <p>PDF, ZIP, etc.</p>
-            </div>
-        </div>
-
         <footer>
-            <p>Enhanced Media Player &copy; 2023 | Template Integration</p>
+            <p>Enhanced Media Player © 2025</p>
         </footer>
     </div>
 
     <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            // DOM Elements
-            const mediaElement = document.getElementById('mediaElement');
-            const audioElement = document.getElementById('audioElement');
-            const videoPlayer = document.getElementById('videoPlayer');
-            const audioPlayer = document.getElementById('audioPlayer');
-            const unsupportedMessage = document.getElementById('unsupportedMessage');
-            const audioVisualizer = document.getElementById('audioVisualizer');
-            const progressContainer = document.getElementById('progressContainer');
-            const progressBar = document.getElementById('progressBar');
-            const currentTimeEl = document.getElementById('currentTime');
-            const durationEl = document.getElementById('duration');
-            const playPauseBtn = document.getElementById('playPause');
-            const skipBackwardBtn = document.getElementById('skipBackward');
-            const skipForwardBtn = document.getElementById('skipForward');
-            const muteToggleBtn = document.getElementById('muteToggle');
-            const volumeSlider = document.getElementById('volumeSlider');
-            const volumeLevel = document.getElementById('volumeLevel');
-            const playbackRateSelect = document.getElementById('playbackRate');
-            const downloadBtn = document.getElementById('downloadBtn');
-            const fileNameEl = document.getElementById('fileName');
-            const fileDetailsEl = document.getElementById('fileDetails');
-            const mediaOptions = document.querySelectorAll('.media-option');
-            
-            // Current active media element
-            let activeMedia = mediaElement;
-            let isDragging = false;
-            
-            // Initialize audio visualizer bars
-            const barCount = 30;
-            for (let i = 0; i < barCount; i++) {
-                const bar = document.createElement('div');
-                bar.className = 'bar';
-                bar.style.height = `${Math.random() * 30 + 10}%`;
-                audioVisualizer.appendChild(bar);
+        const media = document.getElementById('mediaElement');
+        const playPause = document.getElementById('playPause');
+        const currentTimeEl = document.getElementById('currentTime');
+        const durationEl = document.getElementById('duration');
+        const progressBar = document.getElementById('progressBar');
+
+        playPause.addEventListener('click', () => {
+            if (!media) return;
+            if (media.paused) {
+                media.play();
+                playPause.innerHTML = '<i class="fas fa-pause"></i>';
+            } else {
+                media.pause();
+                playPause.innerHTML = '<i class="fas fa-play"></i>';
             }
-            const bars = document.querySelectorAll('.bar');
-            
-            // Update visualizer bars (for demo purposes)
-            function updateVisualizer() {
-                bars.forEach(bar => {
-                    const newHeight = Math.random() * 70 + 10;
-                    bar.style.height = `${newHeight}%`;
-                });
-            }
-            
-            // Media option selection
-            mediaOptions.forEach(option => {
-                option.addEventListener('click', function() {
-                    mediaOptions.forEach(opt => opt.classList.remove('active'));
-                    this.classList.add('active');
-                    
-                    const type = this.dataset.type;
-                    switchMediaType(type);
-                });
-            });
-            
-            // Switch between media types
-            function switchMediaType(type) {
-                // Hide all players first
-                videoPlayer.style.display = 'none';
-                audioPlayer.style.display = 'none';
-                unsupportedMessage.style.display = 'none';
-                
-                // Reset media elements
-                mediaElement.pause();
-                audioElement.pause();
-                mediaElement.currentTime = 0;
-                audioElement.currentTime = 0;
-                
-                // Show appropriate player and set active media
-                if (type === 'video') {
-                    videoPlayer.style.display = 'flex';
-                    activeMedia = mediaElement;
-                    fileNameEl.textContent = '{{ media_type|title }}';
-                    fileDetailsEl.textContent = 'MP4 • 1080p • 2:30';
-                    downloadBtn.href = '{{ media_url }}';
-                    audioVisualizer.style.display = 'none';
-                } else if (type === 'audio') {
-                    audioPlayer.style.display = 'flex';
-                    activeMedia = audioElement;
-                    fileNameEl.textContent = '{{ media_type|title }}';
-                    fileDetailsEl.textContent = 'MP3 • 320kbps • 3:45';
-                    downloadBtn.href = '{{ media_url }}';
-                    audioVisualizer.style.display = 'flex';
-                    
-                    // Start visualizer animation for audio
-                    setInterval(updateVisualizer, 200);
-                } else {
-                    unsupportedMessage.style.display = 'block';
-                    activeMedia = null;
-                    fileNameEl.textContent = '{{ media_url }}';
-                    fileDetailsEl.textContent = 'PDF • 2.4 MB';
-                    downloadBtn.href = '{{ media_url }}';
-                }
-                
-                // Reset play button
-                playPauseBtn.innerHTML = '<i class="fas fa-play"></i>';
-                
-                // Update duration display
-                if (activeMedia) {
-                    setTimeout(() => {
-                        durationEl.textContent = formatTime(type === 'video' ? 150 : 225);
-                    }, 500);
-                }
-            }
-            
-            // Play/Pause functionality
-            playPauseBtn.addEventListener('click', function() {
-                if (!activeMedia) return;
-                
-                if (activeMedia.paused) {
-                    activeMedia.play();
-                    this.innerHTML = '<i class="fas fa-pause"></i>';
-                } else {
-                    activeMedia.pause();
-                    this.innerHTML = '<i class="fas fa-play"></i>';
-                }
-            });
-            
-            // Skip buttons
-            skipBackwardBtn.addEventListener('click', function() {
-                if (!activeMedia) return;
-                activeMedia.currentTime = Math.max(0, activeMedia.currentTime - 10);
-            });
-            
-            skipForwardBtn.addEventListener('click', function() {
-                if (!activeMedia) return;
-                activeMedia.currentTime = Math.min(activeMedia.duration, activeMedia.currentTime + 10);
-            });
-            
-            // Progress bar - touch and mouse support
-            progressContainer.addEventListener('mousedown', startDrag);
-            progressContainer.addEventListener('touchstart', startDrag);
-            
-            function startDrag(e) {
-                if (!activeMedia) return;
-                
-                isDragging = true;
-                updateProgress(e);
-                
-                document.addEventListener('mousemove', updateProgress);
-                document.addEventListener('touchmove', updateProgress);
-                document.addEventListener('mouseup', stopDrag);
-                document.addEventListener('touchend', stopDrag);
-                
-                e.preventDefault();
-            }
-            
-            function updateProgress(e) {
-                if (!isDragging || !activeMedia) return;
-                
-                const rect = progressContainer.getBoundingClientRect();
-                const clientX = e.type.includes('touch') ? e.touches[0].clientX : e.clientX;
-                const percent = Math.min(Math.max((clientX - rect.left) / rect.width, 0), 1);
-                
-                progressBar.style.width = `${percent * 100}%`;
-                activeMedia.currentTime = percent * activeMedia.duration;
-                currentTimeEl.textContent = formatTime(activeMedia.currentTime);
-            }
-            
-            function stopDrag() {
-                isDragging = false;
-                document.removeEventListener('mousemove', updateProgress);
-                document.removeEventListener('touchmove', updateProgress);
-                document.removeEventListener('mouseup', stopDrag);
-                document.removeEventListener('touchend', stopDrag);
-            }
-            
-            // Update progress bar and time
-            function updateMediaProgress() {
-                if (!activeMedia || isDragging) return;
-                
-                if (!isNaN(activeMedia.duration)) {
-                    const percent = (activeMedia.currentTime / activeMedia.duration) * 100;
-                    progressBar.style.width = `${percent}%`;
-                    currentTimeEl.textContent = formatTime(activeMedia.currentTime);
-                }
-            }
-            
-            mediaElement.addEventListener('timeupdate', updateMediaProgress);
-            audioElement.addEventListener('timeupdate', updateMediaProgress);
-            
-            // Volume control - touch and mouse support
-            volumeSlider.addEventListener('mousedown', startVolumeDrag);
-            volumeSlider.addEventListener('touchstart', startVolumeDrag);
-            
-            function startVolumeDrag(e) {
-                updateVolume(e);
-                
-                document.addEventListener('mousemove', updateVolume);
-                document.addEventListener('touchmove', updateVolume);
-                document.addEventListener('mouseup', stopVolumeDrag);
-                document.addEventListener('touchend', stopVolumeDrag);
-                
-                e.preventDefault();
-            }
-            
-            function updateVolume(e) {
-                const rect = volumeSlider.getBoundingClientRect();
-                const clientX = e.type.includes('touch') ? e.touches[0].clientX : e.clientX;
-                const percent = Math.min(Math.max((clientX - rect.left) / rect.width, 0), 1);
-                
-                if (activeMedia) {
-                    activeMedia.volume = percent;
-                }
-                volumeLevel.style.width = `${percent * 100}%`;
-                
-                // Update mute button icon
-                if (percent === 0) {
-                    muteToggleBtn.innerHTML = '<i class="fas fa-volume-mute"></i>';
-                } else if (percent < 0.5) {
-                    muteToggleBtn.innerHTML = '<i class="fas fa-volume-down"></i>';
-                } else {
-                    muteToggleBtn.innerHTML = '<i class="fas fa-volume-up"></i>';
-                }
-            }
-            
-            function stopVolumeDrag() {
-                document.removeEventListener('mousemove', updateVolume);
-                document.removeEventListener('touchmove', updateVolume);
-                document.removeEventListener('mouseup', stopVolumeDrag);
-                document.removeEventListener('touchend', stopVolumeDrag);
-            }
-            
-            // Mute toggle
-            muteToggleBtn.addEventListener('click', function() {
-                if (!activeMedia) return;
-                
-                activeMedia.muted = !activeMedia.muted;
-                if (activeMedia.muted) {
-                    this.innerHTML = '<i class="fas fa-volume-mute"></i>';
-                    volumeLevel.style.width = '0%';
-                } else {
-                    this.innerHTML = '<i class="fas fa-volume-up"></i>';
-                    volumeLevel.style.width = `${activeMedia.volume * 100}%`;
-                }
-            });
-            
-            // Playback rate
-            playbackRateSelect.addEventListener('change', function() {
-                if (activeMedia) {
-                    activeMedia.playbackRate = parseFloat(this.value);
-                }
-            });
-            
-            // Format time helper function
-            function formatTime(seconds) {
-                const mins = Math.floor(seconds / 60);
-                const secs = Math.floor(seconds % 60);
-                return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
-            }
-            
-            // Simulate initial volume level
-            volumeLevel.style.width = '80%';
-            if (activeMedia) {
-                activeMedia.volume = 0.8;
-            }
-            
-            // Prevent context menu on long press (mobile)
-            document.addEventListener('contextmenu', function(e) {
-                if (e.target.classList.contains('btn') || 
-                    e.target.classList.contains('progress-container') ||
-                    e.target.classList.contains('volume-slider')) {
-                    e.preventDefault();
-                }
-            });
         });
+
+        media?.addEventListener('timeupdate', () => {
+            if (!media.duration) return;
+            const progress = (media.currentTime / media.duration) * 100;
+            progressBar.style.width = `${progress}%`;
+            currentTimeEl.textContent = formatTime(media.currentTime);
+            durationEl.textContent = formatTime(media.duration);
+        });
+
+        function formatTime(sec) {
+            const mins = Math.floor(sec / 60);
+            const secs = Math.floor(sec % 60);
+            return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+        }
     </script>
 </body>
 </html>
