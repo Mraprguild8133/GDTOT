@@ -4,7 +4,10 @@ import uuid
 import logging
 import asyncio
 import functools
+import base64
+import threading
 from datetime import datetime, timedelta
+from flask import Flask, render_template, jsonify
 
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
@@ -28,6 +31,8 @@ WASABI_ACCESS_KEY = os.environ.get("WASABI_ACCESS_KEY")
 WASABI_SECRET_KEY = os.environ.get("WASABI_SECRET_KEY")
 WASABI_BUCKET = os.environ.get("WASABI_BUCKET")
 WASABI_REGION = os.environ.get("WASABI_REGION")
+FLASK_HOST = os.environ.get("FLASK_HOST", "0.0.0.0")
+FLASK_PORT = int(os.environ.get("FLASK_PORT", "8000"))
 
 # Check for required variables
 if not all([API_ID, API_HASH, BOT_TOKEN, WASABI_ACCESS_KEY, WASABI_SECRET_KEY, WASABI_BUCKET, WASABI_REGION]):
@@ -42,7 +47,34 @@ MB = 1024 ** 2
 MAX_FILE_SIZE = 4 * 1024 ** 3  # 4GB
 URL_EXPIRY = 604800  # 7 days
 
-# --- 2. WASABI (BOTO3) INITIALIZATION ---
+# --- 2. FLASK APP FOR MEDIA PLAYER ---
+flask_app = Flask(__name__, template_folder="templates")
+
+@flask_app.route("/")
+def index():
+    return render_template("index.html")
+
+@flask_app.route("/player/<media_type>/<encoded_url>")
+def player(media_type, encoded_url):
+    # Decode the URL
+    try:
+        # Add padding if needed
+        padding = 4 - (len(encoded_url) % 4)
+        if padding != 4:
+            encoded_url += '=' * padding
+        media_url = base64.urlsafe_b64decode(encoded_url).decode()
+        return render_template("player.html", media_type=media_type, media_url=media_url)
+    except Exception as e:
+        return f"Error decoding URL: {str(e)}", 400
+
+@flask_app.route("/health")
+def health():
+    return jsonify({"status": "ok"})
+
+def run_flask():
+    flask_app.run(host=FLASK_HOST, port=FLASK_PORT, debug=False)
+
+# --- 3. WASABI (BOTO3) INITIALIZATION ---
 try:
     s3_config = Config(
         signature_version='s3v4',
@@ -51,9 +83,8 @@ try:
         retries={'max_attempts': 10, 'mode': 'standard'}
     )
     
-    # CORRECT TransferConfig usage
     transfer_config = TransferConfig(
-        multipart_threshold=100 * MB,  # Start multipart upload for files > 100MB
+        multipart_threshold=100 * MB,
         max_concurrency=20,
         multipart_chunksize=25 * MB,
         use_threads=True
@@ -72,7 +103,7 @@ except Exception as e:
     logger.error(f"Error initializing Boto3 client: {e}")
     exit(1)
 
-# --- 3. PYROGRAM BOT INITIALIZATION ---
+# --- 4. PYROGRAM BOT INITIALIZATION ---
 app = Client(
     "wasabi_file_bot",
     api_id=int(API_ID),
@@ -81,7 +112,9 @@ app = Client(
 )
 logger.info("Pyrogram Client Initialized.")
 
-# --- 4. PROGRESS TRACKING & UTILITIES ---
+# --- 5. PROGRESS TRACKING & UTILITIES ---
+processing_messages = set()
+
 class ProgressTracker:
     """Tracks upload progress for Boto3 and updates the Telegram message."""
     def __init__(self, client: Client, message: Message, total: int):
@@ -153,7 +186,21 @@ async def pyrogram_progress_callback(current, total, client, message):
     except Exception as e:
         logger.warning(f"Failed to edit download progress message: {e}")
 
-# --- 5. BOT HANDLERS ---
+def get_media_type(file_name):
+    """Determine media type based on file extension."""
+    video_extensions = ['.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v']
+    audio_extensions = ['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.wma']
+    
+    file_ext = os.path.splitext(file_name.lower())[1]
+    
+    if file_ext in video_extensions:
+        return 'video'
+    elif file_ext in audio_extensions:
+        return 'audio'
+    else:
+        return 'document'
+
+# --- 6. BOT HANDLERS ---
 @app.on_message(filters.command("start") & filters.private)
 async def start_command(client: Client, message: Message):
     """Handles the /start command."""
@@ -163,8 +210,12 @@ async def start_command(client: Client, message: Message):
         "Cloud Storage using high-speed multipart transfer capabilities.\n\n"
         "**How to use:**\n"
         "1. Simply send me any file (Document, Video, or Audio).\n"
-        "2. The file will be uploaded, and I will provide you with a secure, "
-        "time-limited (7-day) download link.\n\n"
+        "2. The file will be uploaded, and I will provide you with multiple download options.\n\n"
+        "**Features:**\n"
+        "• 🚀 Direct download links\n"
+        "• 📺 Built-in media player for videos/audio\n"
+        "• ⚡ High-speed multipart uploads\n"
+        "• 🔒 Secure 7-day access links\n\n"
         "**Service Status:** 🟢 24/7 Running Capacity Support"
     )
     
@@ -180,134 +231,162 @@ async def upload_another_callback(client, callback_query):
 
 @app.on_message(filters.private & (filters.document | filters.video | filters.audio))
 async def handle_file_upload(client: Client, message: Message):
-    """Handles incoming media/document messages."""
+    """Handles incoming media/document messages with duplicate protection."""
     
-    file_info = message.document or message.video or message.audio
-    
-    if file_info.file_size > MAX_FILE_SIZE:
-        return await message.reply_text("❌ File size exceeds the 4GB bot capacity limit.")
-    
-    file_name = file_info.file_name or f"file-{uuid.uuid4().hex}"
-    file_size = file_info.file_size
-    temp_file_path = os.path.join(os.getcwd(), str(uuid.uuid4()))
-    wasabi_key = f"{message.from_user.id}/{uuid.uuid4().hex}/{file_name}"
-    
-    progress_msg = await message.reply_text("🔄 Starting file processing...")
-    progress_msg.data = {
-        'start_time': time.time(),
-        'last_edit_time': 0.0
-    }
-
-    download_path = None
-
-    # Download from Telegram
-    try:
-        await progress_msg.edit_text(
-            f"**⬇️ Starting Telegram download for** `{file_name}` **({file_size / MB:.2f} MB)...**"
-        )
-        download_path = await client.download_media(
-            message,
-            file_name=temp_file_path,
-            progress=pyrogram_progress_callback,
-            progress_args=(client, progress_msg)
-        )
-        logger.info(f"Downloaded file to: {download_path}")
-        await progress_msg.edit_text("✅ **Download complete!** Starting Wasabi upload...")
-        
-    except Exception as e:
-        logger.error(f"Error during Telegram download: {e}")
-        return await progress_msg.edit_text(f"❌ Download failed: {e}")
-    
-    # Upload to Wasabi
-    try:
-        tracker = ProgressTracker(client, progress_msg, file_size)
-
-        await progress_msg.edit_text(
-            f"**⬆️ Starting Immortal Speed Wasabi upload for** `{file_name}` **...**"
-        )
-        
-        # Create a partial function with all parameters for thread execution
-        upload_function = functools.partial(
-            s3_client.upload_file,
-            download_path,
-            WASABI_BUCKET,
-            wasabi_key,
-            Callback=tracker.update,
-            Config=transfer_config
-        )
-        
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, upload_function)
-        
-        await tracker._edit_message_progress()
-        await progress_msg.edit_text("🎉 **Wasabi Upload Complete!**\n\nGenerating secure download link...")
-
-    except ClientError as e:
-        logger.error(f"Wasabi S3 Client Error: {e}")
-        await progress_msg.edit_text(f"❌ Wasabi Upload Failed (S3 Error): {e}")
-        # Clean up on error
-        if download_path and os.path.exists(download_path):
-            os.remove(download_path)
+    # Duplicate message protection
+    message_id = f"{message.chat.id}_{message.id}"
+    if message_id in processing_messages:
         return
-    except Exception as e:
-        logger.error(f"Error during Wasabi upload: {e}")
-        await progress_msg.edit_text(f"❌ Wasabi Upload Failed: {e}")
-        # Clean up on error
-        if download_path and os.path.exists(download_path):
-            os.remove(download_path)
-        return
-
-    # Generate Download Link with Button
+    
+    processing_messages.add(message_id)
+    
     try:
-        url = s3_client.generate_presigned_url(
-            'get_object',
-            Params={'Bucket': WASABI_BUCKET, 'Key': wasabi_key},
-            ExpiresIn=URL_EXPIRY
-        )
+        file_info = message.document or message.video or message.audio
         
-        expiry_date = datetime.now() + timedelta(seconds=URL_EXPIRY)
-        expiry_days = (expiry_date - datetime.now()).days
+        if file_info.file_size > MAX_FILE_SIZE:
+            await message.reply_text("❌ File size exceeds the 4GB bot capacity limit.")
+            return
         
-        # Create enhanced inline keyboard with multiple options
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🚀 Direct Download", url=url)],
-            [
-                InlineKeyboardButton("📋 Copy URL", callback_data="copy_url"),
+        file_name = file_info.file_name or f"file-{uuid.uuid4().hex}"
+        file_size = file_info.file_size
+        temp_file_path = os.path.join(os.getcwd(), str(uuid.uuid4()))
+        wasabi_key = f"{message.from_user.id}/{uuid.uuid4().hex}/{file_name}"
+        
+        progress_msg = await message.reply_text("🔄 Starting file processing...")
+        progress_msg.data = {
+            'start_time': time.time(),
+            'last_edit_time': 0.0
+        }
+
+        download_path = None
+
+        # Download from Telegram
+        try:
+            await progress_msg.edit_text(
+                f"**⬇️ Starting Telegram download for** `{file_name}` **({file_size / MB:.2f} MB)...**"
+            )
+            download_path = await client.download_media(
+                message,
+                file_name=temp_file_path,
+                progress=pyrogram_progress_callback,
+                progress_args=(client, progress_msg)
+            )
+            logger.info(f"Downloaded file to: {download_path}")
+            await progress_msg.edit_text("✅ **Download complete!** Starting Wasabi upload...")
+            
+        except Exception as e:
+            logger.error(f"Error during Telegram download: {e}")
+            await progress_msg.edit_text(f"❌ Download failed: {e}")
+            return
+        
+        # Upload to Wasabi
+        try:
+            tracker = ProgressTracker(client, progress_msg, file_size)
+
+            await progress_msg.edit_text(
+                f"**⬆️ Starting Immortal Speed Wasabi upload for** `{file_name}` **...**"
+            )
+            
+            upload_function = functools.partial(
+                s3_client.upload_file,
+                download_path,
+                WASABI_BUCKET,
+                wasabi_key,
+                Callback=tracker.update,
+                Config=transfer_config
+            )
+            
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, upload_function)
+            
+            await tracker._edit_message_progress()
+            await progress_msg.edit_text("🎉 **Wasabi Upload Complete!**\n\nGenerating download options...")
+
+        except ClientError as e:
+            logger.error(f"Wasabi S3 Client Error: {e}")
+            await progress_msg.edit_text(f"❌ Wasabi Upload Failed (S3 Error): {e}")
+            if download_path and os.path.exists(download_path):
+                os.remove(download_path)
+            return
+        except Exception as e:
+            logger.error(f"Error during Wasabi upload: {e}")
+            await progress_msg.edit_text(f"❌ Wasabi Upload Failed: {e}")
+            if download_path and os.path.exists(download_path):
+                os.remove(download_path)
+            return
+
+        # Generate Download Options
+        try:
+            # Generate presigned URL
+            url = s3_client.generate_presigned_url(
+                'get_object',
+                Params={'Bucket': WASABI_BUCKET, 'Key': wasabi_key},
+                ExpiresIn=URL_EXPIRY
+            )
+            
+            expiry_date = datetime.now() + timedelta(seconds=URL_EXPIRY)
+            expiry_days = (expiry_date - datetime.now()).days
+            
+            # Determine media type and create player URL if applicable
+            media_type = get_media_type(file_name)
+            player_url = None
+            
+            if media_type in ['video', 'audio']:
+                # Encode URL for player
+                encoded_url = base64.urlsafe_b64encode(url.encode()).decode().rstrip('=')
+                player_url = f"http://{FLASK_HOST}:{FLASK_PORT}/player/{media_type}/{encoded_url}"
+            
+            # Create buttons based on media type
+            buttons = []
+            if player_url:
+                buttons.append([InlineKeyboardButton("🎬 Media Player", url=player_url)])
+            
+            buttons.append([InlineKeyboardButton("🚀 Direct Download", url=url)])
+            buttons.append([
+                InlineKeyboardButton("📋 Copy URL", callback_data=f"copy_url_{uuid.uuid4().hex}"),
                 InlineKeyboardButton("🔄 Upload Another", callback_data="upload_another")
-            ]
-        ])
-        
-        final_message = (
-            f"**⚡️ IMMORTAL SPEED TRANSFER SUCCESSFUL!**\n\n"
-            f"**📁 File:** `{file_name}`\n"
-            f"**📊 Size:** `{file_size / MB:.2f} MB`\n"
-            f"**⏰ Link Expires:** `{expiry_days} days` ({expiry_date.strftime('%Y-%m-%d %H:%M:%S UTC')})\n\n"
-            f"Click **🚀 Direct Download** to download your file instantly!"
-        )
-        
-        await progress_msg.edit_text(final_message, reply_markup=keyboard)
-        logger.info(f"Generated URL for {file_name}")
+            ])
+            
+            keyboard = InlineKeyboardMarkup(buttons)
+            
+            final_message = (
+                f"**⚡️ IMMORTAL SPEED TRANSFER SUCCESSFUL!**\n\n"
+                f"**📁 File:** `{file_name}`\n"
+                f"**📊 Size:** `{file_size / MB:.2f} MB`\n"
+                f"**🎯 Type:** `{media_type.upper()}`\n"
+                f"**⏰ Link Expires:** `{expiry_days} days`\n\n"
+            )
+            
+            if player_url:
+                final_message += "**Choose your download method:**\n• 🎬 **Media Player** - Stream in browser\n• 🚀 **Direct Download** - Download file directly"
+            else:
+                final_message += "Click **🚀 Direct Download** to get your file!"
+            
+            await progress_msg.edit_text(final_message, reply_markup=keyboard)
+            logger.info(f"Generated URL for {file_name}")
 
-    except Exception as e:
-        logger.error(f"Error generating presigned URL: {e}")
-        await progress_msg.edit_text(f"❌ Failed to generate download link: {e}")
+        except Exception as e:
+            logger.error(f"Error generating download options: {e}")
+            await progress_msg.edit_text(f"❌ Failed to generate download options: {e}")
 
+        finally:
+            # Clean up local file
+            if download_path and os.path.exists(download_path):
+                os.remove(download_path)
+                logger.info(f"Cleaned up local file: {download_path}")
+                
     finally:
-        # Clean up local file
-        if download_path and os.path.exists(download_path):
-            os.remove(download_path)
-            logger.info(f"Cleaned up local file: {download_path}")
+        # Remove from processing set
+        processing_messages.discard(message_id)
 
-# Additional callback handler for copy URL
-@app.on_callback_query(filters.regex("^copy_url$"))
-async def copy_url_callback(client, callback_query):
-    """Handle copy URL button"""
-    # Extract URL from the message text (you might want to store it differently)
-    message_text = callback_query.message.text
-    # This is a simple extraction - you might want to store the URL more reliably
-    await callback_query.answer("URL copy feature would be implemented here", show_alert=True)
-
-# --- 6. MAIN EXECUTION ---
+# --- 7. MAIN EXECUTION ---
 if __name__ == "__main__":
-    logger.info("Starting Wasabi File Upload Bot...")
+    logger.info("Starting Wasabi File Upload Bot with Media Player...")
+    
+    # Start Flask server in a separate thread
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    logger.info(f"Flask media player started on http://{FLASK_HOST}:{FLASK_PORT}")
+    
+    # Start Telegram bot
     app.run()
