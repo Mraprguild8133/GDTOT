@@ -306,7 +306,7 @@ async def link_handler(client: Client, message: Message):
             executor,
             lambda: s3_client.generate_presigned_url(
                 'get_object',
-                Params={'Bucket': WASASABI_BUCKET, 'Key': wasabi_key},
+                Params={'Bucket': WASABI_BUCKET, 'Key': wasabi_key},  # FIXED: WASABI_BUCKET (not WASASABI_BUCKET)
                 ExpiresIn=600  # 10 minutes
             )
         )
