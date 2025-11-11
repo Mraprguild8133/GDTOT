@@ -1,5 +1,6 @@
 # config.py
 import os
+import tempfile
 import logging
 
 # Set up basic logging
@@ -25,8 +26,11 @@ WASABI_ENDPOINT = f"https://s3.{WASABI_REGION}.wasabisys.com"
 MAX_FILE_SIZE = 4 * 1024 * 1024 * 1024  # 4GB
 PRESIGNED_URL_EXPIRY = 7 * 24 * 60 * 60  # 7 days
 
-# Temporary file settings
-TEMP_DIR = ./downloads
+# Temporary file settings - FIXED SYNTAX
+TEMP_DIR = "./downloads"  # Use string with quotes
+
+# Create downloads directory if it doesn't exist
+os.makedirs(TEMP_DIR, exist_ok=True)
 
 # YouTube download settings
 YTDL_OPTIONS = {
