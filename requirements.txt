@@ -1,5 +1,8 @@
-python-telegram-bot==20.7
-requests==2.31.0
-beautifulsoup4==4.12.2
+telethon==1.28.5
+boto3==1.28.57
+aiobotocore==2.11.1
+aiofiles==23.2.1
+python-multipart==0.0.6
+asyncio
 python-dotenv==1.0.0
-lxml==4.9.3
+humanize==4.8.0
