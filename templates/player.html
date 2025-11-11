@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Media Player - {{ media_type|title }}</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #1a1a1a;
+            color: white;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .player-container {
+            max-width: 800px;
+            width: 100%;
+            background: #2d2d2d;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        video, audio {
+            width: 100%;
+            border-radius: 5px;
+        }
+        .download-btn {
+            display: inline-block;
+            background: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            text-decoration: none;
+            border-radius: 5px;
+            margin-top: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="player-container">
+        <h2>{{ media_type|title }} Player</h2>
+        
+        {% if media_type == 'video' %}
+        <video controls autoplay>
+            <source src="{{ media_url }}" type="video/mp4">
+            Your browser does not support the video tag.
+        </video>
+        {% elif media_type == 'audio' %}
+        <audio controls autoplay>
+            <source src="{{ media_url }}" type="audio/mpeg">
+            Your browser does not support the audio tag.
+        </audio>
+        {% else %}
+        <p>This file type cannot be played in the browser.</p>
+        {% endif %}
+        
+        <br>
+        <a href="{{ media_url }}" class="download-btn" download>📥 Download File</a>
+    </div>
+</body>
+</html>
