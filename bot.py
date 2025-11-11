@@ -3,16 +3,17 @@ import time
 import uuid
 import logging
 import asyncio
+import functools
 from datetime import datetime, timedelta
 
 from pyrogram import Client, filters
-from pyrogram.types import Message
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import MessageNotModified
 
 import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
-from boto3.s3.transfer import TransferConfig  # Correct import
+from boto3.s3.transfer import TransferConfig
 
 # --- 1. CONFIGURATION AND ENVIRONMENT SETUP ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -156,7 +157,7 @@ async def pyrogram_progress_callback(current, total, client, message):
 @app.on_message(filters.command("start") & filters.private)
 async def start_command(client: Client, message: Message):
     """Handles the /start command."""
-    await message.reply_text(
+    welcome_text = (
         "👋 **Welcome to the Immortal Speed Wasabi Uploader Bot!**\n\n"
         "This bot automatically handles large file uploads (up to 4GB+) to Wasabi "
         "Cloud Storage using high-speed multipart transfer capabilities.\n\n"
@@ -166,6 +167,16 @@ async def start_command(client: Client, message: Message):
         "time-limited (7-day) download link.\n\n"
         "**Service Status:** 🟢 24/7 Running Capacity Support"
     )
+    
+    await message.reply_text(welcome_text)
+
+@app.on_callback_query(filters.regex("^upload_another$"))
+async def upload_another_callback(client, callback_query):
+    """Handle upload another button"""
+    await callback_query.message.edit_text(
+        "🔄 **Ready for another upload!**\n\n"
+        "Send me any file (document, video, or audio) and I'll upload it to Wasabi."
+    )
 
 @app.on_message(filters.private & (filters.document | filters.video | filters.audio))
 async def handle_file_upload(client: Client, message: Message):
@@ -174,14 +185,14 @@ async def handle_file_upload(client: Client, message: Message):
     file_info = message.document or message.video or message.audio
     
     if file_info.file_size > MAX_FILE_SIZE:
-        return await message.reply_text("File size exceeds the 4GB bot capacity limit.")
+        return await message.reply_text("❌ File size exceeds the 4GB bot capacity limit.")
     
     file_name = file_info.file_name or f"file-{uuid.uuid4().hex}"
     file_size = file_info.file_size
     temp_file_path = os.path.join(os.getcwd(), str(uuid.uuid4()))
     wasabi_key = f"{message.from_user.id}/{uuid.uuid4().hex}/{file_name}"
     
-    progress_msg = await message.reply_text("Starting file processing...")
+    progress_msg = await message.reply_text("🔄 Starting file processing...")
     progress_msg.data = {
         'start_time': time.time(),
         'last_edit_time': 0.0
@@ -201,7 +212,7 @@ async def handle_file_upload(client: Client, message: Message):
             progress_args=(client, progress_msg)
         )
         logger.info(f"Downloaded file to: {download_path}")
-        await progress_msg.edit_text(f"✅ Download complete! Starting Wasabi upload...")
+        await progress_msg.edit_text("✅ **Download complete!** Starting Wasabi upload...")
         
     except Exception as e:
         logger.error(f"Error during Telegram download: {e}")
@@ -215,9 +226,8 @@ async def handle_file_upload(client: Client, message: Message):
             f"**⬆️ Starting Immortal Speed Wasabi upload for** `{file_name}` **...**"
         )
         
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(
-            None,
+        # Create a partial function with all parameters for thread execution
+        upload_function = functools.partial(
             s3_client.upload_file,
             download_path,
             WASABI_BUCKET,
@@ -226,17 +236,28 @@ async def handle_file_upload(client: Client, message: Message):
             Config=transfer_config
         )
         
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, upload_function)
+        
         await tracker._edit_message_progress()
-        await progress_msg.edit_text(f"🎉 **Wasabi Upload Complete!**\n\nGenerating secure download link...")
+        await progress_msg.edit_text("🎉 **Wasabi Upload Complete!**\n\nGenerating secure download link...")
 
     except ClientError as e:
         logger.error(f"Wasabi S3 Client Error: {e}")
         await progress_msg.edit_text(f"❌ Wasabi Upload Failed (S3 Error): {e}")
+        # Clean up on error
+        if download_path and os.path.exists(download_path):
+            os.remove(download_path)
+        return
     except Exception as e:
         logger.error(f"Error during Wasabi upload: {e}")
         await progress_msg.edit_text(f"❌ Wasabi Upload Failed: {e}")
+        # Clean up on error
+        if download_path and os.path.exists(download_path):
+            os.remove(download_path)
+        return
 
-    # Generate Download Link
+    # Generate Download Link with Button
     try:
         url = s3_client.generate_presigned_url(
             'get_object',
@@ -245,17 +266,26 @@ async def handle_file_upload(client: Client, message: Message):
         )
         
         expiry_date = datetime.now() + timedelta(seconds=URL_EXPIRY)
+        expiry_days = (expiry_date - datetime.now()).days
+        
+        # Create enhanced inline keyboard with multiple options
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🚀 Direct Download", url=url)],
+            [
+                InlineKeyboardButton("📋 Copy URL", callback_data="copy_url"),
+                InlineKeyboardButton("🔄 Upload Another", callback_data="upload_another")
+            ]
+        ])
         
         final_message = (
             f"**⚡️ IMMORTAL SPEED TRANSFER SUCCESSFUL!**\n\n"
-            f"**File:** `{file_name}`\n"
-            f"**Size:** `{file_size / MB:.2f} MB`\n\n"
-            f"🔗 **Download Link (Expires {expiry_date.strftime('%Y-%m-%d %H:%M:%S UTC')}):**\n"
-            f"`{url}`\n\n"
-            f"_Secure, time-limited, direct download._"
+            f"**📁 File:** `{file_name}`\n"
+            f"**📊 Size:** `{file_size / MB:.2f} MB`\n"
+            f"**⏰ Link Expires:** `{expiry_days} days` ({expiry_date.strftime('%Y-%m-%d %H:%M:%S UTC')})\n\n"
+            f"Click **🚀 Direct Download** to download your file instantly!"
         )
         
-        await progress_msg.edit_text(final_message)
+        await progress_msg.edit_text(final_message, reply_markup=keyboard)
         logger.info(f"Generated URL for {file_name}")
 
     except Exception as e:
@@ -268,7 +298,16 @@ async def handle_file_upload(client: Client, message: Message):
             os.remove(download_path)
             logger.info(f"Cleaned up local file: {download_path}")
 
+# Additional callback handler for copy URL
+@app.on_callback_query(filters.regex("^copy_url$"))
+async def copy_url_callback(client, callback_query):
+    """Handle copy URL button"""
+    # Extract URL from the message text (you might want to store it differently)
+    message_text = callback_query.message.text
+    # This is a simple extraction - you might want to store the URL more reliably
+    await callback_query.answer("URL copy feature would be implemented here", show_alert=True)
+
 # --- 6. MAIN EXECUTION ---
 if __name__ == "__main__":
-    logger.info("Starting bot...")
+    logger.info("Starting Wasabi File Upload Bot...")
     app.run()
