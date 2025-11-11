@@ -6,6 +6,7 @@ from config import config
 import uuid
 import time
 import io
+from aiobotocore.session import get_session
 
 class WasabiClient:
     def __init__(self):
@@ -28,7 +29,8 @@ class WasabiClient:
         if object_name is None:
             object_name = f"{uuid.uuid4()}_{int(time.time())}"
         
-        session = aiobotocore.get_session()
+        # FIXED: Use get_session from aiobotocore.session
+        session = get_session()
         async with session.create_client(
             's3',
             aws_access_key_id=config.WASABI_ACCESS_KEY,
@@ -110,7 +112,8 @@ class WasabiClient:
     
     async def download_to_stream(self, object_name):
         """Download file from Wasabi and return as stream"""
-        session = aiobotocore.get_session()
+        # FIXED: Use get_session from aiobotocore.session
+        session = get_session()
         async with session.create_client(
             's3',
             aws_access_key_id=config.WASABI_ACCESS_KEY,
@@ -150,7 +153,8 @@ class WasabiClient:
     
     async def delete_file(self, object_name):
         """Delete file from Wasabi"""
-        session = aiobotocore.get_session()
+        # FIXED: Use get_session from aiobotocore.session
+        session = get_session()
         async with session.create_client(
             's3',
             aws_access_key_id=config.WASABI_ACCESS_KEY,
@@ -172,15 +176,25 @@ class WasabiClient:
     async def get_file_info(self, object_name):
         """Get file information from Wasabi"""
         try:
-            response = self.sync_client.head_object(
-                Bucket=config.WASABI_BUCKET,
-                Key=object_name
-            )
-            return {
-                'size': response['ContentLength'],
-                'last_modified': response['LastModified'],
-                'content_type': response.get('ContentType', 'unknown')
-            }
+            # FIXED: Use get_session from aiobotocore.session
+            session = get_session()
+            async with session.create_client(
+                's3',
+                aws_access_key_id=config.WASABI_ACCESS_KEY,
+                aws_secret_access_key=config.WASABI_SECRET_KEY,
+                endpoint_url=f'https://s3.{config.WASABI_REGION}.wasabisys.com',
+                config=self.boto_config
+            ) as client:
+                
+                response = await client.head_object(
+                    Bucket=config.WASABI_BUCKET,
+                    Key=object_name
+                )
+                return {
+                    'size': response['ContentLength'],
+                    'last_modified': response['LastModified'],
+                    'content_type': response.get('ContentType', 'unknown')
+                }
         except Exception as e:
             print(f"File info error: {e}")
             return None
