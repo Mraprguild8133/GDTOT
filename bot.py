@@ -1,334 +1,494 @@
 import os
 import asyncio
+import aiofiles
 import time
-import math
-import uuid
-import logging
-import re
-from urllib.parse import urlparse
+from typing import Optional
+from datetime import datetime
+
 from pyrogram import Client, filters
-from pyrogram.types import Message
-from pyrogram.errors import MessageNotModified
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.enums import ParseMode
+
 import boto3
-from botocore.config import Config
-from yt_dlp import YoutubeDL
-from functools import partial
+import aioboto3
+from botocore.config import Config as BotoConfig
+import speedtest
+import asyncio_throttle
 
-# Import configuration
-from config import (
-    API_ID, API_HASH, BOT_TOKEN,
-    WASABI_ACCESS_KEY, WASABI_SECRET_KEY, WASABI_BUCKET, WASABI_REGION,
-    WASABI_ENDPOINT, MAX_FILE_SIZE, PRESIGNED_URL_EXPIRY,
-    TEMP_DIR, YTDL_OPTIONS
-)
+from config import config
 
-# Security functions
-def sanitize_filename(filename):
-    """Sanitize filename to prevent path traversal and special characters"""
-    if not filename:
-        return f"file_{uuid.uuid4().hex}"
-    
-    filename = re.sub(r'[^\w\-. ]', '', filename)
-    filename = filename.replace('..', '')
-    return filename[:255]  # Limit length
-
-def validate_youtube_url(url):
-    """Validate YouTube URLs"""
-    parsed = urlparse(url)
-    allowed_domains = ['youtube.com', 'www.youtube.com', 'youtu.be', 'm.youtube.com']
-    if not any(domain in parsed.netloc for domain in allowed_domains):
-        raise ValueError("Invalid YouTube URL")
-    return True
-
-def safe_object_name(original_name, prefix=""):
-    """Generate a safe S3 object name"""
-    safe_name = sanitize_filename(original_name)
-    unique_id = uuid.uuid4().hex
-    return f"{prefix}{unique_id}_{safe_name}"
-
-def human_size(bytes, units=[' bytes',' KB',' MB',' GB',' TB']):
-    """Returns a human-readable string representation of bytes."""
-    return str(bytes) + units[0] if bytes < 1024 else human_size(bytes>>10, units[1:])
-
-# Initialize Pyrogram Client
+# Initialize Telegram Client
 app = Client(
-    "wasabi_file_bot",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    bot_token=BOT_TOKEN
+    "wasabi_bot",
+    api_id=config.API_ID,
+    api_hash=config.API_HASH,
+    bot_token=config.BOT_TOKEN
 )
 
-# Initialize Boto3 Client for Wasabi
-s3_client = boto3.client(
-    's3',
-    endpoint_url=WASABI_ENDPOINT,
-    aws_access_key_id=WASABI_ACCESS_KEY,
-    aws_secret_access_key=WASABI_SECRET_KEY,
-    region_name=WASABI_REGION,
-    config=Config(
-        signature_version='s3v4',
-        retries={
-            'max_attempts': 10,
-            'mode': 'standard'
-        }
-    )
+# Configure Wasabi S3 client for optimal performance
+boto_config = BotoConfig(
+    region_name=config.WASABI_REGION,
+    retries={'max_attempts': 3, 'mode': 'standard'},
+    max_pool_connections=50,
+    connect_timeout=10,
+    read_timeout=30
 )
 
-class UploadProgress:
-    """
-    Callback class for Boto3 uploads to update a Telegram message periodically.
-    This runs synchronously in the Boto3 worker thread.
-    """
-    def __init__(self, filename, filesize, client, message):
-        self._filename = filename
-        self._size = filesize
-        self._seen_so_far = 0
-        self._client = client
-        self._message = message
-        self._start_time = time.time()
-        self._last_edit_time = 0
-        # Determine the edit frequency based on file size (more frequent for large files)
-        self._edit_frequency = 5 # seconds
-        if filesize > 100 * 1024 * 1024: # > 100 MB
-            self._edit_frequency = 2
+# Throttle to prevent rate limiting
+throttler = asyncio_throttle.Throttler(rate_limit=10, period=1)
 
-    def __call__(self, bytes_amount):
-        """Called by Boto3 periodically."""
-        self._seen_so_far += bytes_amount
-        current_time = time.time()
-
-        if current_time - self._last_edit_time > self._edit_frequency or self._seen_so_far == self._size:
-            self._last_edit_time = current_time
-
-            # Calculate speed and percentage
-            elapsed_time = current_time - self._start_time
-            if elapsed_time > 0:
-                speed = self._seen_so_far / elapsed_time
-            else:
-                speed = 0
-
-            # Generate the progress bar string
-            percentage = (self._seen_so_far / self._size) * 100
-            done = math.floor(percentage / 10)
-            remaining = 10 - done
-            progress_bar = f"[{'■' * done}{'□' * remaining}]"
-
-            status_text = (
-                f"**🚀 Uploading to Wasabi...**\n"
-                f"File: `{self._filename}`\n"
-                f"Progress: **{percentage:.1f}%**\n"
-                f"{progress_bar}\n"
-                f"Uploaded: **{human_size(self._seen_so_far)}** of **{human_size(self._size)}**\n"
-                f"Speed: **{human_size(speed)}/s**\n"
-                f"Elapsed: **{int(elapsed_time)}s**"
-            )
-
-            # Schedule the message edit back into the main event loop
-            future = asyncio.run_coroutine_threadsafe(
-                self._client.edit_message_text(
-                    chat_id=self._message.chat.id,
-                    message_id=self._message.id,
-                    text=status_text
-                ),
-                self._client.loop
-            )
-            try:
-                future.result(timeout=2) 
-            except asyncio.TimeoutError:
-                logging.warning("Message edit scheduling timed out.")
-            except MessageNotModified:
-                pass
-            except Exception as e:
-                logging.error(f"Error during progress update: {e}")
-
-async def upload_file_to_wasabi(client, message, file_path, object_name):
-    """
-    Handles the asynchronous upload of a file to Wasabi S3.
-    Boto3 call is wrapped in asyncio.to_thread to prevent blocking.
-    """
-    file_size = os.path.getsize(file_path)
-
-    # Send initial status message
-    status_message = await message.reply_text(f"Starting upload for `{os.path.basename(file_path)}` ({human_size(file_size)})...", quote=True)
-
-    try:
-        # Create the callback instance
-        progress_callback = UploadProgress(
-            filename=os.path.basename(file_path),
-            filesize=file_size,
-            client=client,
-            message=status_message
+class WasabiManager:
+    def __init__(self):
+        self.session = aioboto3.Session()
+        self.sync_client = boto3.client(
+            's3',
+            aws_access_key_id=config.WASABI_ACCESS_KEY,
+            aws_secret_access_key=config.WASABI_SECRET_KEY,
+            endpoint_url=config.WASABI_ENDPOINT,
+            config=boto_config
         )
-        
-        # Use functools.partial to run the blocking Boto3 call in a separate thread
-        upload_task = partial(
-            s3_client.upload_file,
-            Filename=file_path,
-            Bucket=WASABI_BUCKET,
-            Key=object_name,
-            Callback=progress_callback,
-            ExtraArgs={'ACL': 'public-read'}
-        )
-        
-        # Run the synchronous upload in a separate thread
-        await asyncio.to_thread(upload_task)
-
-        # Generate pre-signed URL for secure download
-        presigned_url = s3_client.generate_presigned_url(
-            'get_object',
-            Params={'Bucket': WASABI_BUCKET, 'Key': object_name},
-            ExpiresIn=PRESIGNED_URL_EXPIRY
-        )
-
-        final_message_text = (
-            f"✅ **Upload Complete!** (Wasabi S3)\n\n"
-            f"📁 **File:** `{os.path.basename(file_path)}`\n"
-            f"🔗 **Download Link (Expires in {PRESIGNED_URL_EXPIRY // (24 * 60 * 60)} days):**\n"
-            f"**[Click to Download]({presigned_url})**\n\n"
-            f"*(Capacity: 24/7 Running Bot. Supports up to {MAX_FILE_SIZE // (1024**3)}GB files.)*"
-        )
-        await status_message.edit_text(final_message_text, disable_web_page_preview=True)
-        return True
-
-    except Exception as e:
-        error_text = f"❌ **Upload Failed!**\n\nError: `{e}`"
-        await status_message.edit_text(error_text)
-        logging.error(f"Wasabi upload failed: {e}")
-        return False
-
-# --- Telegram Bot Handlers ---
-
-@app.on_message(filters.command("start") & filters.private)
-async def start_command(client, message):
-    """Handles the /start command."""
-    await message.reply_text(
-        f"👋 **Welcome to the Wasabi Cloud Bot!**\n\n"
-        f"This bot can upload your files and YouTube videos directly to your Wasabi S3 storage.\n\n"
-        f"**🚀 Features:**\n"
-        f"1. **Send a File/Video** (up to {MAX_FILE_SIZE // (1024**3)}GB) to the bot to upload it.\n"
-        f"2. Use `/ytdl [URL]` to download a YouTube video and upload it.\n\n"
-        f"**Bucket:** `{WASABI_BUCKET}`\n"
-        f"**Region:** `{WASABI_REGION}`",
-        quote=True
-    )
-
-@app.on_message(filters.command("ytdl") & filters.private)
-async def youtube_download_and_upload(client, message):
-    """Downloads a YouTube URL using yt-dlp and uploads to Wasabi."""
-    if len(message.command) < 2:
-        return await message.reply_text("Please provide a YouTube URL. Usage: `/ytdl <url>`")
-
-    url = message.command[1]
     
-    try:
-        validate_youtube_url(url)
-    except ValueError as e:
-        return await message.reply_text(f"❌ {str(e)}")
-
-    unique_id = uuid.uuid4().hex
-    
-    # Enhanced yt-dlp options with error handling
-    ydl_opts = YTDL_OPTIONS.copy()
-    ydl_opts.update({
-        'outtmpl': os.path.join(TEMP_DIR, f"{unique_id}_%(title)s.%(ext)s"),
-        'logger': logging.getLogger('yt_dlp'),
-    })
-    
-    status_message = await message.reply_text(f"⏳ Downloading video from: `{url}`...", disable_web_page_preview=True, quote=True)
-    
-    file_path = None
-    try:
-        def sync_download():
-            with YoutubeDL(ydl_opts) as ydl:
-                info_dict = ydl.extract_info(url, download=True)
-                return ydl.prepare_filename(info_dict)
-                
-        file_path = await asyncio.to_thread(sync_download)
-        
-        if not file_path or not os.path.exists(file_path):
-            await status_message.edit_text("❌ Download failed or file path not found.")
-            return
-
-        # Start the Wasabi upload with safe object name
-        object_name = safe_object_name(os.path.basename(file_path), "youtube/")
-        await upload_file_to_wasabi(client, status_message, file_path, object_name)
-
-    except Exception as e:
-        error_text = f"❌ Video processing failed.\nError: `{str(e)[:200]}`"
-        await status_message.edit_text(error_text)
-        logging.error(f"YouTube download failed: {e}")
-        
-    finally:
-        # Enhanced cleanup
-        if file_path and os.path.exists(file_path):
-            try:
-                os.remove(file_path)
-                logging.info(f"Cleaned up temporary file: {file_path}")
-            except Exception as e:
-                logging.error(f"Failed to clean up file {file_path}: {e}")
-
-@app.on_message((filters.document | filters.video | filters.audio) & filters.private)
-async def handle_file_upload(client, message):
-    """Handles direct file or video uploads from the user."""
-    
-    if message.document:
-        file = message.document
-        file_name = file.file_name or "document"
-    elif message.video:
-        file = message.video
-        file_name = file.file_name or "video.mp4"
-    elif message.audio:
-        file = message.audio
-        file_name = file.file_name or "audio"
-    else:
-        return
-
-    # Check file size
-    if file.file_size > MAX_FILE_SIZE:
-        return await message.reply_text(f"❌ File size exceeds the {MAX_FILE_SIZE // (1024**3)}GB limit.")
-
-    # Sanitize filename
-    safe_file_name = sanitize_filename(file_name)
-    
-    download_status_message = await message.reply_text(
-        f"⏳ Starting download of `{safe_file_name}` from Telegram servers...", 
-        quote=True
-    )
-    
-    file_path = None
-    try:
-        # Download the file locally with safe name
-        file_path = await client.download_media(
-            message=file,
-            file_name=os.path.join(TEMP_DIR, safe_file_name)
-        )
-        
-        if not file_path:
-            await download_status_message.edit_text("❌ Download failed.")
-            return
+    async def upload_file(self, file_path: str, object_name: str, progress_callback=None):
+        """Upload file to Wasabi with progress tracking"""
+        async with self.session.client(
+            's3',
+            aws_access_key_id=config.WASABI_ACCESS_KEY,
+            aws_secret_access_key=config.WASABI_SECRET_KEY,
+            endpoint_url=config.WASABI_ENDPOINT,
+            config=boto_config
+        ) as s3:
             
-        await download_status_message.edit_text(f"✅ Download complete. Starting Wasabi upload for `{safe_file_name}`...")
+            file_size = os.path.getsize(file_path)
+            uploaded = 0
+            
+            async with aiofiles.open(file_path, 'rb') as file:
+                # For large files, use multipart upload
+                if file_size > config.CHUNK_SIZE:
+                    # Create multipart upload
+                    mpu = await s3.create_multipart_upload(
+                        Bucket=config.WASABI_BUCKET,
+                        Key=object_name
+                    )
+                    
+                    parts = []
+                    part_number = 1
+                    
+                    while True:
+                        chunk = await file.read(config.CHUNK_SIZE)
+                        if not chunk:
+                            break
+                            
+                        # Upload part
+                        part = await s3.upload_part(
+                            Bucket=config.WASABI_BUCKET,
+                            Key=object_name,
+                            PartNumber=part_number,
+                            UploadId=mpu['UploadId'],
+                            Body=chunk
+                        )
+                        
+                        parts.append({
+                            'PartNumber': part_number,
+                            'ETag': part['ETag']
+                        })
+                        
+                        uploaded += len(chunk)
+                        if progress_callback:
+                            await progress_callback(uploaded, file_size)
+                            
+                        part_number += 1
+                        await asyncio.sleep(0.1)  # Small delay to prevent overwhelming
+                    
+                    # Complete multipart upload
+                    await s3.complete_multipart_upload(
+                        Bucket=config.WASABI_BUCKET,
+                        Key=object_name,
+                        UploadId=mpu['UploadId'],
+                        MultipartUpload={'Parts': parts}
+                    )
+                else:
+                    # Single part upload for smaller files
+                    await file.seek(0)
+                    await s3.upload_fileobj(
+                        file,
+                        config.WASABI_BUCKET,
+                        object_name,
+                        Callback=progress_callback
+                    )
+            
+            return f"https://{config.WASABI_BUCKET}.s3.{config.WASABI_REGION}.wasabisys.com/{object_name}"
+    
+    async def download_file(self, object_name: str, file_path: str, progress_callback=None):
+        """Download file from Wasabi with progress tracking"""
+        async with self.session.client(
+            's3',
+            aws_access_key_id=config.WASABI_ACCESS_KEY,
+            aws_secret_access_key=config.WASABI_SECRET_KEY,
+            endpoint_url=config.WASABI_ENDPOINT,
+            config=boto_config
+        ) as s3:
+            
+            async with aiofiles.open(file_path, 'wb') as file:
+                response = await s3.get_object(
+                    Bucket=config.WASABI_BUCKET,
+                    Key=object_name
+                )
+                
+                downloaded = 0
+                async for chunk in response['Body']:
+                    await file.write(chunk)
+                    downloaded += len(chunk)
+                    
+                    if progress_callback:
+                        await progress_callback(downloaded)
+                
+                await response['Body'].close()
+    
+    async def generate_presigned_url(self, object_name: str, expiration=3600):
+        """Generate presigned URL for direct download"""
+        url = self.sync_client.generate_presigned_url(
+            'get_object',
+            Params={
+                'Bucket': config.WASABI_BUCKET,
+                'Key': object_name
+            },
+            ExpiresIn=expiration
+        )
+        return url
+    
+    async def get_file_info(self, object_name: str):
+        """Get file information from Wasabi"""
+        try:
+            response = self.sync_client.head_object(
+                Bucket=config.WASABI_BUCKET,
+                Key=object_name
+            )
+            return {
+                'size': response['ContentLength'],
+                'last_modified': response['LastModified'],
+                'etag': response['ETag']
+            }
+        except Exception:
+            return None
 
-        # Start the Wasabi upload with safe object name
-        object_name = safe_object_name(safe_file_name, "telegram_uploads/")
-        await upload_file_to_wasabi(client, download_status_message, file_path, object_name)
+# Initialize Wasabi manager
+wasabi = WasabiManager()
 
-    except Exception as e:
-        error_text = f"❌ File processing failed.\nError: `{str(e)[:200]}`"
-        await download_status_message.edit_text(error_text)
-        logging.error(f"Telegram download/upload failed: {e}")
+def human_readable_size(size_bytes):
+    """Convert bytes to human readable format"""
+    if size_bytes == 0:
+        return "0B"
+    units = ['B', 'KB', 'MB', 'GB', 'TB']
+    import math
+    i = int(math.floor(math.log(size_bytes, 1024)))
+    p = math.pow(1024, i)
+    s = round(size_bytes / p, 2)
+    return f"{s} {units[i]}"
+
+async def speed_test():
+    """Perform network speed test"""
+    st = speedtest.Speedtest()
+    st.get_best_server()
+    
+    download_speed = st.download() / 1_000_000  # Convert to Mbps
+    upload_speed = st.upload() / 1_000_000  # Convert to Mbps
+    ping = st.results.ping
+    
+    return download_speed, upload_speed, ping
+
+@app.on_message(filters.command(["start", "help"]))
+async def start_handler(client, message: Message):
+    """Start command handler"""
+    welcome_text = """
+🚀 **Wasabi Storage Bot**
+
+I can help you store and manage files on Wasabi cloud storage with high-speed transfers!
+
+**Available Commands:**
+📤 `/upload` - Upload files to Wasabi (reply to a file)
+📥 `/download` - Download files from Wasabi
+🔗 `/link <filename>` - Generate download link
+📊 `/status` - Check bot and network status
+📁 `/list` - List files in storage
+
+**Features:**
+• 4GB file support
+• High-speed transfers
+• Progress tracking
+• Direct download links
+• 24/7 availability
+
+Simply send me a file or use the commands above!
+    """
+    
+    await message.reply_text(welcome_text, parse_mode=ParseMode.MARKDOWN)
+
+@app.on_message(filters.command("upload") & (filters.document | filters.video | filters.audio | filters.photo))
+async def upload_handler(client, message: Message):
+    """Handle file uploads to Wasabi"""
+    try:
+        if message.document:
+            file_size = message.document.file_size
+            file_name = message.document.file_name
+        elif message.video:
+            file_size = message.video.file_size
+            file_name = message.video.file_name or f"video_{message.id}.mp4"
+        elif message.audio:
+            file_size = message.audio.file_size
+            file_name = message.audio.file_name or f"audio_{message.id}.mp3"
+        else:
+            file_size = message.photo.file_size
+            file_name = f"photo_{message.id}.jpg"
         
-    finally:
-        # Enhanced cleanup
-        if file_path and os.path.exists(file_path):
-            try:
-                os.remove(file_path)
-                logging.info(f"Cleaned up temporary file: {file_path}")
-            except Exception as e:
-                logging.error(f"Failed to clean up file {file_path}: {e}")
+        # Check file size
+        if file_size > config.MAX_FILE_SIZE:
+            await message.reply_text(f"❌ File too large! Maximum size is 4GB. Your file: {human_readable_size(file_size)}")
+            return
+        
+        # Download progress callback
+        async def download_progress(current, total):
+            percent = (current / total) * 100
+            if int(percent) % 10 == 0:  # Update every 10% to avoid spam
+                await message.edit_text(f"📥 Downloading... {percent:.1f}%")
+        
+        # Upload progress callback
+        async def upload_progress(uploaded, total):
+            percent = (uploaded / total) * 100
+            if int(percent) % 10 == 0:
+                await message.edit_text(f"📤 Uploading to Wasabi... {percent:.1f}%")
+        
+        # Start processing
+        status_msg = await message.reply_text("📥 Starting download...")
+        
+        # Download file from Telegram
+        download_path = await message.download(
+            file_name=f"downloads/{file_name}",
+            progress=download_progress,
+            progress_args=(status_msg,)
+        )
+        
+        await status_msg.edit_text("📤 Uploading to Wasabi storage...")
+        
+        # Generate unique object name
+        timestamp = int(time.time())
+        object_name = f"{timestamp}_{file_name}"
+        
+        # Upload to Wasabi
+        wasabi_url = await wasabi.upload_file(
+            download_path,
+            object_name,
+            progress_callback=upload_progress
+        )
+        
+        # Generate presigned URL
+        download_url = await wasabi.generate_presigned_url(object_name)
+        
+        # Clean up local file
+        os.remove(download_path)
+        
+        # Send success message
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔗 Download Link", url=download_url)],
+            [InlineKeyboardButton("📁 Storage URL", url=wasabi_url)]
+        ])
+        
+        await status_msg.edit_text(
+            f"✅ **File Uploaded Successfully!**\n\n"
+            f"📁 **Filename:** `{file_name}`\n"
+            f"💾 **Size:** {human_readable_size(file_size)}\n"
+            f"🆔 **Object ID:** `{object_name}`\n"
+            f"⏰ **Expires:** 1 hour\n\n"
+            f"Use `/link {object_name}` to regenerate link later.",
+            reply_markup=keyboard,
+            parse_mode=ParseMode.MARKDOWN
+        )
+        
+    except Exception as e:
+        await message.reply_text(f"❌ Upload failed: {str(e)}")
 
-# --- Bot Start ---
+@app.on_message(filters.command("download"))
+async def download_handler(client, message: Message):
+    """Handle file downloads from Wasabi"""
+    try:
+        if len(message.command) < 2:
+            await message.reply_text("❌ Please provide filename. Usage: `/download filename`", parse_mode=ParseMode.MARKDOWN)
+            return
+        
+        object_name = message.command[1]
+        
+        # Check if file exists
+        file_info = await wasabi.get_file_info(object_name)
+        if not file_info:
+            await message.reply_text("❌ File not found in storage!")
+            return
+        
+        # Download progress callback
+        async def download_progress(downloaded):
+            percent = (downloaded / file_info['size']) * 100
+            if int(percent) % 20 == 0:
+                await status_msg.edit_text(f"📥 Downloading from Wasabi... {percent:.1f}%")
+        
+        status_msg = await message.reply_text("📥 Starting download from Wasabi...")
+        
+        # Download file
+        local_path = f"downloads/{object_name}"
+        await wasabi.download_file(object_name, local_path, progress_callback=download_progress)
+        
+        await status_msg.edit_text("📤 Uploading to Telegram...")
+        
+        # Upload to Telegram
+        await message.reply_document(
+            local_path,
+            caption=f"📁 {object_name}\n💾 {human_readable_size(file_info['size'])}"
+        )
+        
+        # Clean up
+        os.remove(local_path)
+        await status_msg.delete()
+        
+    except Exception as e:
+        await message.reply_text(f"❌ Download failed: {str(e)}")
+
+@app.on_message(filters.command("link"))
+async def link_handler(client, message: Message):
+    """Generate download links"""
+    try:
+        if len(message.command) < 2:
+            await message.reply_text("❌ Please provide filename. Usage: `/link filename`", parse_mode=ParseMode.MARKDOWN)
+            return
+        
+        object_name = message.command[1]
+        
+        # Check if file exists
+        file_info = await wasabi.get_file_info(object_name)
+        if not file_info:
+            await message.reply_text("❌ File not found in storage!")
+            return
+        
+        # Generate presigned URL
+        download_url = await wasabi.generate_presigned_url(object_name)
+        
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔗 Download Now", url=download_url)]
+        ])
+        
+        await message.reply_text(
+            f"🔗 **Download Link Generated**\n\n"
+            f"📁 **Filename:** `{object_name}`\n"
+            f"💾 **Size:** {human_readable_size(file_info['size'])}\n"
+            f"⏰ **Expires:** {file_info['last_modified'].strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"🕒 **Link Valid:** 1 hour",
+            reply_markup=keyboard,
+            parse_mode=ParseMode.MARKDOWN
+        )
+        
+    except Exception as e:
+        await message.reply_text(f"❌ Link generation failed: {str(e)}")
+
+@app.on_message(filters.command("status"))
+async def status_handler(client, message: Message):
+    """Check bot and network status"""
+    try:
+        status_msg = await message.reply_text("🔄 Checking status...")
+        
+        # Check Wasabi connection
+        wasabi_status = "✅ Connected"
+        try:
+            wasabi.sync_client.list_buckets()
+        except Exception:
+            wasabi_status = "❌ Disconnected"
+        
+        # Perform speed test
+        download_speed, upload_speed, ping = await asyncio.get_event_loop().run_in_executor(None, speed_test)
+        
+        # Get storage info
+        try:
+            bucket_size = 0
+            file_count = 0
+            paginator = wasabi.sync_client.get_paginator('list_objects_v2')
+            for page in paginator.paginate(Bucket=config.WASABI_BUCKET):
+                if 'Contents' in page:
+                    for obj in page['Contents']:
+                        bucket_size += obj['Size']
+                        file_count += 1
+        except Exception:
+            bucket_size = 0
+            file_count = 0
+        
+        status_text = f"""
+🏥 **Bot Status Report**
+
+🌐 **Network Status:**
+📡 Ping: {ping:.2f} ms
+⬇️ Download: {download_speed:.2f} Mbps
+⬆️ Upload: {upload_speed:.2f} Mbps
+
+💾 **Storage Status:**
+{wasabi_status}
+📊 Total Files: {file_count}
+💽 Storage Used: {human_readable_size(bucket_size)}
+
+🤖 **Bot Info:**
+🕒 Uptime: 24/7
+📦 Max File: 4GB
+⚡ High Speed: Enabled
+
+**Ready to serve!** 🚀
+        """
+        
+        await status_msg.edit_text(status_text, parse_mode=ParseMode.MARKDOWN)
+        
+    except Exception as e:
+        await message.reply_text(f"❌ Status check failed: {str(e)}")
+
+@app.on_message(filters.command("list"))
+async def list_handler(client, message: Message):
+    """List files in storage"""
+    try:
+        status_msg = await message.reply_text("📁 Fetching file list...")
+        
+        files = []
+        paginator = wasabi.sync_client.get_paginator('list_objects_v2')
+        
+        for page in paginator.paginate(Bucket=config.WASABI_BUCKET):
+            if 'Contents' in page:
+                for obj in page['Contents']:
+                    files.append({
+                        'name': obj['Key'],
+                        'size': obj['Size'],
+                        'modified': obj['LastModified']
+                    })
+        
+        if not files:
+            await status_msg.edit_text("📭 No files in storage!")
+            return
+        
+        # Format file list (show first 20 files)
+        file_list = "📁 **Files in Storage:**\n\n"
+        for i, file in enumerate(files[:20], 1):
+            file_list += f"{i}. `{file['name']}`\n"
+            file_list += f"   📏 {human_readable_size(file['size'])} | "
+            file_list += f"🕒 {file['modified'].strftime('%m/%d %H:%M')}\n\n"
+        
+        if len(files) > 20:
+            file_list += f"... and {len(files) - 20} more files"
+        
+        await status_msg.edit_text(file_list, parse_mode=ParseMode.MARKDOWN)
+        
+    except Exception as e:
+        await message.reply_text(f"❌ Failed to list files: {str(e)}")
+
+async def main():
+    """Main function"""
+    # Create downloads directory
+    os.makedirs("downloads", exist_ok=True)
+    
+    print("🚀 Starting Wasabi Telegram Bot...")
+    print("✅ Bot is running 24/7 with high-speed Wasabi storage!")
+    print("📊 Features: 4GB file support, progress tracking, direct links")
+    
+    await app.start()
+    await asyncio.Event().wait()  # Run forever
+
 if __name__ == "__main__":
-    logging.info("Bot is starting...")
-    app.run()
-    logging.info("Bot stopped.")
+    asyncio.run(main())
