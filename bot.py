@@ -212,8 +212,7 @@ async def upload_handler(client: Client, message: Message):
         
         temp_path = await client.download_media(
             reply, 
-            file_name=file_name,
-            progress=lambda current, total: logger.info(f"Download progress: {current}/{total}")
+            file_name=file_name
         )
         
         if not temp_path or not os.path.exists(temp_path):
@@ -307,7 +306,7 @@ async def link_handler(client: Client, message: Message):
             executor,
             lambda: s3_client.generate_presigned_url(
                 'get_object',
-                Params={'Bucket': WASABI_BUCKET, 'Key': wasabi_key},
+                Params={'Bucket': WASASABI_BUCKET, 'Key': wasabi_key},
                 ExpiresIn=600  # 10 minutes
             )
         )
@@ -353,15 +352,12 @@ if __name__ == "__main__":
     logger.info("Wasabi Telegram Bot starting...")
     
     try:
-        app.start()
-        logger.info("Bot is running. Press Ctrl+C to stop.")
-        app.idle()
+        app.run()
     except KeyboardInterrupt:
         logger.info("Received interrupt signal...")
     except Exception as e:
         logger.exception("Bot crashed with error:")
     finally:
         logger.info("Shutting down bot...")
-        app.stop()
         executor.shutdown(wait=True)
         logger.info("Bot shutdown complete.")
