@@ -44,7 +44,9 @@ class BotManager:
             print("🔧 Initializing Wasabi Telegram Bot...")
             print("⚡ Mode: Direct Streaming (No Temporary Files)")
             
+            # Initialize bot properly
             self.bot = TelegramWasabiBot()
+            await self.bot.initialize()  # Fixed: await the initialization
             await self.bot.run()
             
         except Exception as e:
