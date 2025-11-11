@@ -1,5 +1,5 @@
 telethon==1.42.0
-boto3==1.40.70
+boto3==1.41.0
 aiobotocore==2.25.1
 aiofiles==25.1.0
 python-multipart==0.0.20
