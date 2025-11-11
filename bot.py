@@ -2,7 +2,6 @@ import os
 import asyncio
 import time
 import math
-import tempfile
 import uuid
 import logging
 import re
@@ -37,7 +36,7 @@ def validate_youtube_url(url):
     """Validate YouTube URLs"""
     parsed = urlparse(url)
     allowed_domains = ['youtube.com', 'www.youtube.com', 'youtu.be', 'm.youtube.com']
-    if parsed.netloc not in allowed_domains:
+    if not any(domain in parsed.netloc for domain in allowed_domains):
         raise ValueError("Invalid YouTube URL")
     return True
 
@@ -46,6 +45,10 @@ def safe_object_name(original_name, prefix=""):
     safe_name = sanitize_filename(original_name)
     unique_id = uuid.uuid4().hex
     return f"{prefix}{unique_id}_{safe_name}"
+
+def human_size(bytes, units=[' bytes',' KB',' MB',' GB',' TB']):
+    """Returns a human-readable string representation of bytes."""
+    return str(bytes) + units[0] if bytes < 1024 else human_size(bytes>>10, units[1:])
 
 # Initialize Pyrogram Client
 app = Client(
@@ -71,10 +74,130 @@ s3_client = boto3.client(
     )
 )
 
-# Keep your existing utility functions (human_size, UploadProgress, upload_file_to_wasabi)
-# ... [rest of your existing utility functions] ...
+class UploadProgress:
+    """
+    Callback class for Boto3 uploads to update a Telegram message periodically.
+    This runs synchronously in the Boto3 worker thread.
+    """
+    def __init__(self, filename, filesize, client, message):
+        self._filename = filename
+        self._size = filesize
+        self._seen_so_far = 0
+        self._client = client
+        self._message = message
+        self._start_time = time.time()
+        self._last_edit_time = 0
+        # Determine the edit frequency based on file size (more frequent for large files)
+        self._edit_frequency = 5 # seconds
+        if filesize > 100 * 1024 * 1024: # > 100 MB
+            self._edit_frequency = 2
 
-# Enhanced bot handlers with security improvements
+    def __call__(self, bytes_amount):
+        """Called by Boto3 periodically."""
+        self._seen_so_far += bytes_amount
+        current_time = time.time()
+
+        if current_time - self._last_edit_time > self._edit_frequency or self._seen_so_far == self._size:
+            self._last_edit_time = current_time
+
+            # Calculate speed and percentage
+            elapsed_time = current_time - self._start_time
+            if elapsed_time > 0:
+                speed = self._seen_so_far / elapsed_time
+            else:
+                speed = 0
+
+            # Generate the progress bar string
+            percentage = (self._seen_so_far / self._size) * 100
+            done = math.floor(percentage / 10)
+            remaining = 10 - done
+            progress_bar = f"[{'■' * done}{'□' * remaining}]"
+
+            status_text = (
+                f"**🚀 Uploading to Wasabi...**\n"
+                f"File: `{self._filename}`\n"
+                f"Progress: **{percentage:.1f}%**\n"
+                f"{progress_bar}\n"
+                f"Uploaded: **{human_size(self._seen_so_far)}** of **{human_size(self._size)}**\n"
+                f"Speed: **{human_size(speed)}/s**\n"
+                f"Elapsed: **{int(elapsed_time)}s**"
+            )
+
+            # Schedule the message edit back into the main event loop
+            future = asyncio.run_coroutine_threadsafe(
+                self._client.edit_message_text(
+                    chat_id=self._message.chat.id,
+                    message_id=self._message.id,
+                    text=status_text
+                ),
+                self._client.loop
+            )
+            try:
+                future.result(timeout=2) 
+            except asyncio.TimeoutError:
+                logging.warning("Message edit scheduling timed out.")
+            except MessageNotModified:
+                pass
+            except Exception as e:
+                logging.error(f"Error during progress update: {e}")
+
+async def upload_file_to_wasabi(client, message, file_path, object_name):
+    """
+    Handles the asynchronous upload of a file to Wasabi S3.
+    Boto3 call is wrapped in asyncio.to_thread to prevent blocking.
+    """
+    file_size = os.path.getsize(file_path)
+
+    # Send initial status message
+    status_message = await message.reply_text(f"Starting upload for `{os.path.basename(file_path)}` ({human_size(file_size)})...", quote=True)
+
+    try:
+        # Create the callback instance
+        progress_callback = UploadProgress(
+            filename=os.path.basename(file_path),
+            filesize=file_size,
+            client=client,
+            message=status_message
+        )
+        
+        # Use functools.partial to run the blocking Boto3 call in a separate thread
+        upload_task = partial(
+            s3_client.upload_file,
+            Filename=file_path,
+            Bucket=WASABI_BUCKET,
+            Key=object_name,
+            Callback=progress_callback,
+            ExtraArgs={'ACL': 'public-read'}
+        )
+        
+        # Run the synchronous upload in a separate thread
+        await asyncio.to_thread(upload_task)
+
+        # Generate pre-signed URL for secure download
+        presigned_url = s3_client.generate_presigned_url(
+            'get_object',
+            Params={'Bucket': WASABI_BUCKET, 'Key': object_name},
+            ExpiresIn=PRESIGNED_URL_EXPIRY
+        )
+
+        final_message_text = (
+            f"✅ **Upload Complete!** (Wasabi S3)\n\n"
+            f"📁 **File:** `{os.path.basename(file_path)}`\n"
+            f"🔗 **Download Link (Expires in {PRESIGNED_URL_EXPIRY // (24 * 60 * 60)} days):**\n"
+            f"**[Click to Download]({presigned_url})**\n\n"
+            f"*(Capacity: 24/7 Running Bot. Supports up to {MAX_FILE_SIZE // (1024**3)}GB files.)*"
+        )
+        await status_message.edit_text(final_message_text, disable_web_page_preview=True)
+        return True
+
+    except Exception as e:
+        error_text = f"❌ **Upload Failed!**\n\nError: `{e}`"
+        await status_message.edit_text(error_text)
+        logging.error(f"Wasabi upload failed: {e}")
+        return False
+
+# --- Telegram Bot Handlers ---
+
 @app.on_message(filters.command("start") & filters.private)
 async def start_command(client, message):
     """Handles the /start command."""
@@ -131,7 +254,7 @@ async def youtube_download_and_upload(client, message):
         await upload_file_to_wasabi(client, status_message, file_path, object_name)
 
     except Exception as e:
-        error_text = f"❌ Video processing failed.\nError: `{str(e)[:200]}`"  # Limit error length
+        error_text = f"❌ Video processing failed.\nError: `{str(e)[:200]}`"
         await status_message.edit_text(error_text)
         logging.error(f"YouTube download failed: {e}")
         
@@ -179,6 +302,11 @@ async def handle_file_upload(client, message):
             message=file,
             file_name=os.path.join(TEMP_DIR, safe_file_name)
         )
+        
+        if not file_path:
+            await download_status_message.edit_text("❌ Download failed.")
+            return
+            
         await download_status_message.edit_text(f"✅ Download complete. Starting Wasabi upload for `{safe_file_name}`...")
 
         # Start the Wasabi upload with safe object name
@@ -199,6 +327,7 @@ async def handle_file_upload(client, message):
             except Exception as e:
                 logging.error(f"Failed to clean up file {file_path}: {e}")
 
+# --- Bot Start ---
 if __name__ == "__main__":
     logging.info("Bot is starting...")
     app.run()
