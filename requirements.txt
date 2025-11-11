@@ -3,7 +3,7 @@ telethon==1.28.5
 
 # AWS/Wasabi SDK - COMPATIBLE VERSIONS
 boto3==1.26.165
-botocore==1.29.165
+botocore==1.30.0
 aiobotocore==2.5.4  # Most stable with other deps
 
 # Async Operations
