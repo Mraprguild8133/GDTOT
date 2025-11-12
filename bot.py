@@ -6,7 +6,6 @@ import asyncio
 import functools
 import base64
 import threading
-import requests
 from datetime import datetime, timedelta
 from flask import Flask, render_template, jsonify
 
@@ -37,10 +36,6 @@ WASABI_REGION = os.environ.get("WASABI_REGION")
 RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL")  # Render provides this automatically
 FLASK_HOST = os.environ.get("FLASK_HOST", "0.0.0.0")
 FLASK_PORT = int(os.environ.get("PORT", "10000"))  # Render uses PORT environment variable
-
-# Uptime monitoring (optional but recommended)
-HEALTHCHECKS_IO_URL = os.environ.get("https://hc-ping.com/52584294-1372-4b39-8cd6-897a094ee134")
-UPTIME_ROBOT_URL = os.environ.get("https://status.domain-monitor.io/6220e956-a8f3-41d4-a93a-b2c03386734f/")
 
 # Check for required variables
 if not all([API_ID, API_HASH, BOT_TOKEN, WASABI_ACCESS_KEY, WASABI_SECRET_KEY, WASABI_BUCKET, WASABI_REGION]):
@@ -87,77 +82,12 @@ def player(media_type, encoded_url):
 
 @flask_app.route("/health")
 def health():
-    return jsonify({
-        "status": "ok", 
-        "service": "Wasabi Media Player",
-        "timestamp": datetime.now().isoformat(),
-        "bot_status": "running"
-    })
-
-@flask_app.route("/ping")
-def ping():
-    """Simple ping endpoint for uptime monitoring"""
-    return jsonify({"status": "pong", "timestamp": datetime.now().isoformat()})
+    return jsonify({"status": "ok", "service": "Wasabi Media Player"})
 
 def run_flask():
     flask_app.run(host=FLASK_HOST, port=FLASK_PORT, debug=False)
 
-# --- 3. UPTIME MONITORING SYSTEM ---
-class UptimeMonitor:
-    def __init__(self):
-        self.is_running = True
-        
-    def start_monitoring(self):
-        """Start periodic health pings"""
-        monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
-        monitor_thread.start()
-        logger.info("Uptime monitoring started")
-        
-    def _monitor_loop(self):
-        """Main monitoring loop"""
-        while self.is_running:
-            try:
-                # Ping our own health endpoint every 5 minutes
-                if RENDER_URL:
-                    try:
-                        response = requests.get(f"{RENDER_URL}/health", timeout=10)
-                        if response.status_code == 200:
-                            logger.debug("Self-ping successful")
-                    except Exception as e:
-                        logger.warning(f"Self-ping failed: {e}")
-                
-                # Ping external monitoring services
-                self._ping_external_services()
-                
-            except Exception as e:
-                logger.error(f"Uptime monitoring error: {e}")
-            
-            # Sleep for 5 minutes
-            time.sleep(300)  # 5 minutes
-    
-    def _ping_external_services(self):
-        """Ping external monitoring services"""
-        try:
-            # Healthchecks.io
-            if HEALTHCHECKS_IO_URL:
-                requests.get(HEALTHCHECKS_IO_URL, timeout=10)
-                logger.debug("Healthchecks.io ping sent")
-            
-            # UptimeRobot (via webhook)
-            if UPTIME_ROBOT_URL:
-                requests.get(UPTIME_ROBOT_URL, timeout=10)
-                logger.debug("UptimeRobot ping sent")
-                
-        except Exception as e:
-            logger.warning(f"External ping failed: {e}")
-    
-    def stop(self):
-        self.is_running = False
-
-# Initialize uptime monitor
-uptime_monitor = UptimeMonitor()
-
-# --- 4. WASABI (BOTO3) INITIALIZATION ---
+# --- 3. WASABI (BOTO3) INITIALIZATION ---
 try:
     s3_config = Config(
         signature_version='s3v4',
@@ -186,7 +116,7 @@ except Exception as e:
     logger.error(f"Error initializing Boto3 client: {e}")
     exit(1)
 
-# --- 5. PYROGRAM BOT INITIALIZATION ---
+# --- 4. PYROGRAM BOT INITIALIZATION ---
 app = Client(
     "wasabi_file_bot",
     api_id=int(API_ID),
@@ -195,7 +125,7 @@ app = Client(
 )
 logger.info("Pyrogram Client Initialized.")
 
-# --- 6. PROGRESS TRACKING & UTILITIES ---
+# --- 5. PROGRESS TRACKING & UTILITIES ---
 processing_messages = set()
 
 class ProgressTracker:
@@ -257,7 +187,7 @@ def get_media_type(file_name):
     else:
         return 'document'
 
-# --- 7. BOT HANDLERS ---
+# --- 6. BOT HANDLERS ---
 @app.on_message(filters.command("start") & filters.private)
 async def start_command(client: Client, message: Message):
     welcome_text = (
@@ -271,20 +201,6 @@ async def start_command(client: Client, message: Message):
         "**Service Status:** 🟢 24/7 Running Capacity Support"
     )
     await message.reply_text(welcome_text)
-
-@app.on_message(filters.command("status") & filters.private)
-async def status_command(client: Client, message: Message):
-    """Check bot status"""
-    status_text = (
-        "🤖 **Bot Status**\n\n"
-        "**Service:** 🟢 Online\n"
-        "**Storage:** Wasabi Cloud\n"
-        "**Max File Size:** 4GB\n"
-        "**Uptime:** 24/7\n"
-        "**Last Check:** " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "\n\n"
-        "The bot is running smoothly and ready to handle your files!"
-    )
-    await message.reply_text(status_text)
 
 @app.on_callback_query(filters.regex("^upload_another$"))
 async def upload_another_callback(client, callback_query):
@@ -377,53 +293,11 @@ async def handle_file_upload(client: Client, message: Message):
     finally:
         processing_messages.discard(message_id)
 
-# --- 8. BOT STARTUP AND SHUTDOWN ---
-@app.on_raw_update()
-async def keep_alive_handler(client, update, users, chats):
-    """Handler that keeps the bot active by processing raw updates"""
-    pass
-
-async def startup():
-    """Bot startup routine"""
-    logger.info("🤖 Starting Wasabi File Upload Bot...")
-    uptime_monitor.start_monitoring()
-    logger.info("✅ Uptime monitoring started")
-    
-    # Send startup notification if possible
-    try:
-        await app.send_message("me", "🚀 Wasabi Upload Bot Started Successfully!\n\n"
-                                  f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-                                  f"🌐 Server: {BASE_URL}")
-    except Exception as e:
-        logger.warning(f"Could not send startup message: {e}")
-
-async def shutdown():
-    """Bot shutdown routine"""
-    logger.info("🛑 Shutting down Wasabi File Upload Bot...")
-    uptime_monitor.stop()
-
-# --- 9. MAIN EXECUTION ---
+# --- 7. MAIN EXECUTION ---
 if __name__ == "__main__":
     logger.info("Starting Wasabi File Upload Bot with Media Player...")
-    
-    # Start Flask server in a separate thread
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
-    logger.info(f"🌐 Flask media player started on {BASE_URL}")
-    
-    # Add startup and shutdown handlers
-    app.start()
-    
-    # Run startup routine
-    asyncio.run(startup())
-    
-    try:
-        # Keep the main thread alive
-        logger.info("✅ Bot is now running and ready to accept files!")
-        app.run()
-    except KeyboardInterrupt:
-        logger.info("Received interrupt signal...")
-    finally:
-        asyncio.run(shutdown())
-        app.stop()
-        logger.info("Bot stopped successfully")
+    logger.info(f"Flask media player started on {BASE_URL}")
+    app.run()
+        
